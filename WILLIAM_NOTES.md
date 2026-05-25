@@ -116,6 +116,7 @@ Read-only product. Your inbox is safe.
 
 **Toolbar** at the top now has:
 - **Arrange** — sort lanes by Last updated / Date created / **Ambitiousness** (most ambitions first) / Deadline / Most inactive, with an ascending/descending toggle. **Last updated is the tiebreaker** for every sort (so within equal values, the most recently touched float up). Inactive projects naturally drift to the bottom under Last updated / Date created.
+- **The Arrange menu learns from you:** it counts how often you pick each option (shown as a number beside it) and reorders them most-used-first — but **Last updated stays pinned at the top** as the default, so e.g. if you favour Ambitiousness it settles into the second slot. (Counts are stored in your browser for now; can move to your account later.)
 - **Inactive projects are dimmed** (~55% opacity, colour kept) once they've had no activity for 45 days — a gentle "this has gone quiet" signal. They are not hidden or greyed out.
 - **Filter** — Has-a-deadline, Hide completed, Show archived, Inactive only.
 - **Tags** — placeholder for now ("coming soon"); we'll build tag filtering in a later pass but the data model already supports it.

@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+const COUNTS_KEY = "sirma:arrangeCounts";
+const DEFAULT_SORT = "last_updated"; // always pinned first; usage reorders the rest
 
 const SORTS: { value: string; label: string }[] = [
   { value: "last_updated", label: "Last updated" },
@@ -24,6 +28,31 @@ export default function Toolbar() {
     router.push(`${pathname}?${params.toString()}`);
   };
 
+  // Track how often each Arrange option is chosen (stored in this browser),
+  // then reorder the menu most-used-first — but keep the default pinned at top.
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(COUNTS_KEY);
+      if (raw) setCounts(JSON.parse(raw));
+    } catch {}
+  }, []);
+  const bump = (value: string) => {
+    setCounts((prev) => {
+      const next = { ...prev, [value]: (prev[value] ?? 0) + 1 };
+      try {
+        localStorage.setItem(COUNTS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+  const orderedSorts = [
+    ...SORTS.filter((s) => s.value === DEFAULT_SORT),
+    ...SORTS.filter((s) => s.value !== DEFAULT_SORT).sort(
+      (a, b) => (counts[b.value] ?? 0) - (counts[a.value] ?? 0)
+    ),
+  ];
+
   const sort = sp.get("sort") ?? "last_updated";
   const dir = sp.get("dir") ?? "desc";
   const deadline = sp.get("deadline") ?? "";
@@ -45,11 +74,15 @@ export default function Toolbar() {
         <select
           className={selectCls}
           value={sort}
-          onChange={(e) => update({ sort: e.target.value })}
+          onChange={(e) => {
+            bump(e.target.value);
+            update({ sort: e.target.value });
+          }}
         >
-          {SORTS.map((s) => (
+          {orderedSorts.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
+              {counts[s.value] ? ` (${counts[s.value]})` : ""}
             </option>
           ))}
         </select>
