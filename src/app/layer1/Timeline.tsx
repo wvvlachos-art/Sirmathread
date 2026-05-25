@@ -93,8 +93,8 @@ const WAND_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(WAND_SVG)}") 2
 // Idle note size band: from a small dot up to a bit wider than a node and
 // ~80% its height. Stored per-note in the browser.
 const NOTE_MIN_W = 14;
-const NOTE_MAX_W = 56;
-const NOTE_MAX_H = 38;
+const NOTE_MAX_W = 84;
+const NOTE_MAX_H = 57;
 const NOTE_DEFAULT_W = 48;
 const NOTE_SIZES_KEY = "sirma:noteSizes";
 const noteHeight = (w: number) => Math.max(NOTE_MIN_W, Math.min(NOTE_MAX_H, Math.round(w * 0.68)));
