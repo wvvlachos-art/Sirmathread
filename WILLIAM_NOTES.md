@@ -136,7 +136,9 @@ Currently filled with **20 dummy projects** (activity spread across the last ~6 
 
 **Tags added (session 2).** 5 default categories seeded (Users, Client, Work type, Spam, Not important), each with colour values. Tags show as **coloured dots** on project labels and inside node squares (they fade in). Apply a tag two ways: **(1)** click a node/project → its menu has a **Tags** area with chips to toggle, or **(2)** the **🪄 magic wand** in the toolbar's Tags section — click it, pick a tag, then click any node/project to stamp it (Esc or click the wand again to stop; the cursor turns into a wand). Tag changes are **instant** (saved in the background) and the dots **arrange like dice pips** so many tags pack neatly in a node. **Filtering:** one **"Filters ▾"** button opens a single panel (status/deadline toggles + tags by category + show spam/low-priority); active filters show as **removable chips** in the bar; and a **"Quick"** strip surfaces the **3 filters you use most** for one-click access (learns from you). Spam / Not important hide their projects by default. All pop-ups are centred so they work in split-screen.
 
-Next: finish the **Tags management panel** (create/rename/delete categories & values + colours — currently it only lists them). Then: clicking a lane opens Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Connect Gmail so real labeled threads replace the dummy data.
+**Tags Manage panel done (session 2):** Tags → Manage is now a full editor — create/rename categories, add/rename values, pick each value's colour, toggle a category as a hide-filter, and delete categories/values (with a confirm, since it removes the tag from any projects/nodes using it).
+
+Next: clicking a lane opens Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next
 

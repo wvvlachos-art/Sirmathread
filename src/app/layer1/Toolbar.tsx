@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useWand } from "./wand";
+import ManageTags from "./ManageTags";
 
 const ARRANGE_COUNTS_KEY = "sirma:arrangeCounts";
 const FILTER_COUNTS_KEY = "sirma:filterCounts";
@@ -343,32 +344,8 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
         </div>
       )}
 
-      {/* Manage (listing only for now) */}
-      {manageOpen && (
-        <div className={overlay} onClick={() => setManageOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Your tags</h2>
-            {categories.map((c) => (
-              <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">{c.name}</div>
-                <div className="flex flex-wrap gap-1">
-                  {c.values.map((v) => (
-                    <span key={v.id} className="rounded-full px-2 py-0.5 text-xs text-zinc-100" style={{ border: `1px solid ${v.color}` }}>
-                      {v.value}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <p className="mt-2 text-xs text-zinc-500">Creating / renaming / deleting tags is the next step.</p>
-            <div className="mt-4 flex justify-end">
-              <button onClick={() => setManageOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Manage tags */}
+      {manageOpen && <ManageTags categories={categories} onClose={() => setManageOpen(false)} />}
     </div>
   );
 }

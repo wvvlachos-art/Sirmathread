@@ -80,6 +80,95 @@ export async function createManualNode(
   return {};
 }
 
+// ---- Tag management (categories + values) --------------------------------
+export async function createCategory(name: string, sortOrder: number): Promise<{ error?: string }> {
+  const clean = name.trim();
+  if (!clean) return { error: "Category name is required." };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const { error } = await supabase.from("tag_categories").insert({
+    user_id: user.id,
+    name: clean,
+    sort_order: sortOrder,
+    is_default: false,
+    is_hide_filter: false,
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function renameCategory(id: string, name: string): Promise<{ error?: string }> {
+  const clean = name.trim();
+  if (!clean) return { error: "Name is required." };
+  const supabase = await createClient();
+  const { error } = await supabase.from("tag_categories").update({ name: clean }).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function setCategoryHide(id: string, isHide: boolean): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("tag_categories").update({ is_hide_filter: isHide }).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function deleteCategory(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("tag_categories").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function createTagValue(
+  categoryId: string,
+  value: string,
+  color: string
+): Promise<{ error?: string }> {
+  const clean = value.trim();
+  if (!clean) return { error: "Value is required." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("tag_values")
+    .insert({ category_id: categoryId, value: clean, color });
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function updateTagValue(
+  id: string,
+  fields: { value?: string; color?: string }
+): Promise<{ error?: string }> {
+  const patch: { value?: string; color?: string } = {};
+  if (fields.value !== undefined) {
+    const clean = fields.value.trim();
+    if (!clean) return { error: "Value is required." };
+    patch.value = clean;
+  }
+  if (fields.color !== undefined) patch.color = fields.color;
+  const supabase = await createClient();
+  const { error } = await supabase.from("tag_values").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function deleteTagValue(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("tag_values").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
 // Toggle a tag on a project (add if absent, remove if present).
 export async function toggleProjectTag(
   projectId: string,
