@@ -18,10 +18,16 @@ export default async function Home() {
       </p>
 
       {user ? (
-        <div className="flex flex-col items-center gap-3">
+        <div className="flex flex-col items-center gap-4">
           <p className="text-sm text-zinc-400">
             Signed in as <span className="text-zinc-200">{user.email}</span>
           </p>
+          <Link
+            href="/layer1"
+            className="rounded-full bg-zinc-50 px-6 py-3 text-base font-medium text-zinc-900 transition-colors hover:bg-zinc-200"
+          >
+            Open your projects →
+          </Link>
           <SignOutButton />
         </div>
       ) : (

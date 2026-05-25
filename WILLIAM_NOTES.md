@@ -112,7 +112,9 @@ Read-only product. Your inbox is safe.
 - Setup involved: registering the app in Google Cloud Console, enabling Google in Supabase, and building the login screen + behind-the-scenes session handling.
 - Snag we hit & fixed: Supabase's newer-style keys (sb_publishable.../sb_secret...) were rejected by the login service, so we switched to the classic "legacy" keys (the long eyJ... ones), which work everywhere.
 
-Next: build the actual screens — the Layer 1 overview (all projects as lanes) and Layer 2 (single project detail) — and connect Gmail so real emails flow in.
+**Layer 1 overview screen built (session 2) — first real screen!** Visit http://localhost:3000 → "Open your projects →" (or /layer1). It shows your projects as horizontal lanes on a shared month-timeline: nodes placed by date, joined by wires, with deadline nodes filling red in stages and "done" nodes muted gray. Read-only, as the spec intends. Currently shows 3 sample projects (Acme Website Redesign, Q3 Hiring, Office Move) we added so the screen isn't empty — these can be wiped anytime; they're marked with a "SAMPLE/" label.
+
+Next: clicking a lane should open Layer 2 (the single-project detail view with draggable context/insight/note bubbles). And connect Gmail so your real labeled threads replace the sample data.
 
 ## What I need from you next
 
