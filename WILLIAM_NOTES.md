@@ -107,7 +107,12 @@ Read-only product. Your inbox is safe.
 
 **Database tables created (session 2).** All 10 tables now exist in Supabase — projects, emails, nodes, notes, bubbles, tags (3 tables), profiles, preferences — each with per-user security locks ("Row-Level Security") so users only ever see their own data. We chose to build it multi-user-ready from the start so there's no rebuild later. The table design is saved in your project at `supabase/schema.sql`.
 
-Next: set up logging in (likely "Sign in with Google", since it pairs naturally with connecting Gmail), then start building the actual screens (Layer 1 overview, Layer 2 detail).
+**"Sign in with Google" now works (session 2).** You can log in at http://localhost:3000 with your Google account, and the app shows you as signed in. Signing in automatically creates your profile + settings in the database. Two accounts exist from testing (wv.vlachos@gmail.com and williamvlachos1995@gmail.com) — the second can be cleaned up later.
+
+- Setup involved: registering the app in Google Cloud Console, enabling Google in Supabase, and building the login screen + behind-the-scenes session handling.
+- Snag we hit & fixed: Supabase's newer-style keys (sb_publishable.../sb_secret...) were rejected by the login service, so we switched to the classic "legacy" keys (the long eyJ... ones), which work everywhere.
+
+Next: build the actual screens — the Layer 1 overview (all projects as lanes) and Layer 2 (single project detail) — and connect Gmail so real emails flow in.
 
 ## What I need from you next
 
@@ -128,5 +133,5 @@ After that, we build features in this order: Gmail OAuth → email sync → Clau
 - Netlify: _account exists, will use this for hosting_
 - Supabase: ✅ _project created (sirmathread); database connected and tested. Keys stored privately in `.env.local` (never uploaded). Database password saved by William._
 - Domain (Porkbun): ✅ _sirmathread.com — purchased_
-- Google Cloud Console (for Gmail API): _not set up yet_
+- Google Cloud Console: ✅ _project "Sirmathread" created; OAuth set up for "Sign in with Google" (used for login now, will extend to Gmail later). Client ID/secret stored privately in `.env.local`._
 - Anthropic API key: ✅ _created, stored securely by William — will live in Netlify env var when deployed_
