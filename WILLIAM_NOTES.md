@@ -105,7 +105,9 @@ Read-only product. Your inbox is safe.
 
 **Also done in session 2:** Supabase (the database) is created and connected — we ran a test that confirmed the app can reach it. Your keys live in a private file (`.env.local`) that Git never uploads.
 
-Next: create the actual database tables (projects, nodes, bubbles, notes, tags, etc.) so the app has somewhere to store your data.
+**Database tables created (session 2).** All 10 tables now exist in Supabase — projects, emails, nodes, notes, bubbles, tags (3 tables), profiles, preferences — each with per-user security locks ("Row-Level Security") so users only ever see their own data. We chose to build it multi-user-ready from the start so there's no rebuild later. The table design is saved in your project at `supabase/schema.sql`.
+
+Next: set up logging in (likely "Sign in with Google", since it pairs naturally with connecting Gmail), then start building the actual screens (Layer 1 overview, Layer 2 detail).
 
 ## What I need from you next
 

@@ -13,7 +13,8 @@
       "PowerShell(node --env-file=.env.local test-connection.mjs)",
       "PowerShell($env:NODE_OPTIONS=\"--use-system-ca\"; node --env-file=.env.local test-connection.mjs)",
       "PowerShell(Remove-Item *)",
-      "PowerShell(Get-NetTCPConnection *)"
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Set-Clipboard *)"
     ]
   }
 }
