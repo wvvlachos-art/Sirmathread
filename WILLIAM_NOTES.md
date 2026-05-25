@@ -134,7 +134,9 @@ Currently filled with **20 dummy projects** (activity spread across the last ~6 
 
 **Deleting/archiving (session 2):** click a **node** → Delete. Click a **project name** → **Archive** (hides it, reversible — toggle "Show archived" to see it) or **Delete permanently** (asks for confirmation, listing how many nodes/ambitions go too; your Gmail is never touched). Behind the scenes this needed one database update (`supabase/manual-support.sql`, already run) that lets projects exist without a Gmail label and stamps each project/node as gmail or manual.
 
-Next: clicking a lane should open Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Build tag filtering. Connect Gmail so real labeled threads replace the dummy data.
+**Tags added (session 2).** 5 default categories seeded (Users, Client, Work type, Spam, Not important), each with colour values. Tags show as **coloured dots** on project labels and inside node squares (they fade in). Apply a tag two ways: **(1)** click a node/project → its menu has a **Tags** area with chips to toggle, or **(2)** the **🪄 magic wand** in the toolbar's Tags section — click it, pick a tag, then click any node/project to stamp it (Esc or click the wand again to stop; the cursor turns into a wand). Tag changes are **instant** (saved in the background). **Filtering** by tags lives under **Filter** ("Tags ▾"); Spam / Not important hide their projects by default ("Show spam / low-priority" reveals them). All the pop-ups are centred so they work in split-screen.
+
+Next: finish the **Tags management panel** (create/rename/delete categories & values + colours — currently it only lists them). Then: clicking a lane opens Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next
 

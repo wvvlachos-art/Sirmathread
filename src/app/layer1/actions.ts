@@ -80,6 +80,50 @@ export async function createManualNode(
   return {};
 }
 
+// Toggle a tag on a project (add if absent, remove if present).
+export async function toggleProjectTag(
+  projectId: string,
+  valueId: string
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("project_tag_values")
+    .select("tag_value_id")
+    .eq("project_id", projectId)
+    .eq("tag_value_id", valueId)
+    .maybeSingle();
+  const { error } = existing
+    ? await supabase
+        .from("project_tag_values")
+        .delete()
+        .eq("project_id", projectId)
+        .eq("tag_value_id", valueId)
+    : await supabase.from("project_tag_values").insert({ project_id: projectId, tag_value_id: valueId });
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+// Toggle a tag on a node (add if absent, remove if present).
+export async function toggleNodeTag(
+  nodeId: string,
+  valueId: string
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("node_tag_values")
+    .select("tag_value_id")
+    .eq("node_id", nodeId)
+    .eq("tag_value_id", valueId)
+    .maybeSingle();
+  const { error } = existing
+    ? await supabase.from("node_tag_values").delete().eq("node_id", nodeId).eq("tag_value_id", valueId)
+    : await supabase.from("node_tag_values").insert({ node_id: nodeId, tag_value_id: valueId });
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
 // Delete a single node (removes it from the canvas; any underlying email row
 // stays in the cache untouched).
 export async function deleteNode(id: string): Promise<{ error?: string }> {

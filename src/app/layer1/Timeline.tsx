@@ -9,8 +9,18 @@ import {
   deleteNode,
   archiveProject,
   deleteProject,
+  toggleProjectTag,
+  toggleNodeTag,
 } from "./actions";
 import MiniCalendar from "./MiniCalendar";
+import { useWand } from "./wand";
+
+type TagCat = {
+  id: string;
+  name: string;
+  isHide: boolean;
+  values: { id: string; value: string; color: string }[];
+};
 
 type LaneNode = {
   id: string;
@@ -20,6 +30,7 @@ type LaneNode = {
   done: boolean;
   deadline: string | null;
   origin: string;
+  tags: string[];
 };
 type Ambition = { id: string; title: string; t: number; done: boolean };
 type Lane = {
@@ -30,6 +41,7 @@ type Lane = {
   inactive: boolean;
   nodes: LaneNode[];
   ambitions: Ambition[];
+  tags: string[];
 };
 
 const GMAIL_COLOR = "#34d399"; // light green
@@ -60,8 +72,27 @@ const isoFromMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const fmtEU = (d: string | number) =>
   new Date(typeof d === "string" ? d + "T00:00:00" : d).toLocaleDateString("en-GB");
 
-export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: number }) {
+// A little wand (stick + star) used as the cursor while the wand is armed.
+const WAND_SVG =
+  "<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'>" +
+  "<line x1='3' y1='25' x2='17' y2='11' stroke='white' stroke-width='2.6' stroke-linecap='round'/>" +
+  "<path d='M21 2 l1.5 4.2 l4.2 1.5 l-4.2 1.5 l-1.5 4.2 l-1.5-4.2 l-4.2-1.5 l4.2-1.5 z' fill='#facc15' stroke='white' stroke-width='0.6'/>" +
+  "</svg>";
+const WAND_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(WAND_SVG)}") 21 6, crosshair`;
+
+export default function Timeline({
+  lanes,
+  nowMs,
+  tagColors,
+  categories,
+}: {
+  lanes: Lane[];
+  nowMs: number;
+  tagColors: Record<string, string>;
+  categories: TagCat[];
+}) {
   const router = useRouter();
+  const { armed, setArmed } = useWand();
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchored = useRef(false);
   const scrollIntent = useRef<"today" | "left" | "right" | null>(null);
@@ -79,11 +110,21 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
   const [addDate, setAddDate] = useState(todayIso());
 
   // Node and project action menus.
-  const [nodeMenu, setNodeMenu] = useState<{ id: string; label: string } | null>(null);
+  const [nodeMenu, setNodeMenu] = useState<{ id: string; label: string; tags: string[] } | null>(null);
   const [projMenu, setProjMenu] = useState<
-    { id: string; name: string; nodeCount: number; ambitionCount: number; archived: boolean } | null
+    {
+      id: string;
+      name: string;
+      nodeCount: number;
+      ambitionCount: number;
+      archived: boolean;
+      tags: string[];
+    } | null
   >(null);
   const [projConfirm, setProjConfirm] = useState(false);
+  // Optimistic tag overrides so dots appear/disappear instantly (no refetch).
+  const [nodeTagOverride, setNodeTagOverride] = useState<Record<string, string[]>>({});
+  const [projTagOverride, setProjTagOverride] = useState<Record<string, string[]>>({});
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -195,6 +236,46 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
     setProjConfirm(false);
   };
 
+  // Esc puts the magic wand down.
+  useEffect(() => {
+    if (!armed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setArmed(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [armed, setArmed]);
+
+  // Current tags for a node/project, respecting any optimistic override.
+  const nodeTagsOf = (n: LaneNode) => nodeTagOverride[n.id] ?? n.tags;
+  const projTagsOf = (p: Lane) => projTagOverride[p.id] ?? p.tags;
+
+  // Toggle instantly in the UI; save in the background; revert if the save fails.
+  const applyNodeTag = (id: string, valueId: string, current: string[]) => {
+    const next = current.includes(valueId)
+      ? current.filter((x) => x !== valueId)
+      : [...current, valueId];
+    setNodeTagOverride((prev) => ({ ...prev, [id]: next }));
+    toggleNodeTag(id, valueId).then((res) => {
+      if (res?.error) {
+        setNodeTagOverride((prev) => ({ ...prev, [id]: current }));
+        alert("Could not update tag: " + res.error);
+      }
+    });
+  };
+  const applyProjTag = (id: string, valueId: string, current: string[]) => {
+    const next = current.includes(valueId)
+      ? current.filter((x) => x !== valueId)
+      : [...current, valueId];
+    setProjTagOverride((prev) => ({ ...prev, [id]: next }));
+    toggleProjectTag(id, valueId).then((res) => {
+      if (res?.error) {
+        setProjTagOverride((prev) => ({ ...prev, [id]: current }));
+        alert("Could not update tag: " + res.error);
+      }
+    });
+  };
+
   // Axis pieces.
   const months: { x: number; label: string }[] = [];
   const days: number[] = [];
@@ -228,7 +309,11 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} className="h-full overflow-auto">
+      <div
+        ref={scrollRef}
+        className="h-full overflow-auto"
+        style={{ cursor: armed ? WAND_CURSOR : undefined }}
+      >
         {measured && (
           <div style={{ width: LABEL_W + canvasW }}>
             {/* Axis row */}
@@ -268,6 +353,7 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
             {/* Lanes */}
             {lanes.map((p) => {
               const centerY = laneH / 2;
+              const ptags = projTagsOf(p);
               const last = p.nodes[p.nodes.length - 1];
               const anchorX = last ? xFor(last.t) : todayX;
               const plusX = anchorX + (last ? NODE / 2 : 0);
@@ -280,23 +366,37 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                 <div key={p.id} className="flex" style={{ opacity: p.inactive ? 0.55 : 1 }}>
                   <div
                     onClick={() =>
-                      setProjMenu({
-                        id: p.id,
-                        name: p.name,
-                        nodeCount: p.nodes.length,
-                        ambitionCount: p.ambitions.length,
-                        archived: p.archived,
-                      })
+                      armed
+                        ? applyProjTag(p.id, armed.id, projTagsOf(p))
+                        : setProjMenu({
+                            id: p.id,
+                            name: p.name,
+                            nodeCount: p.nodes.length,
+                            ambitionCount: p.ambitions.length,
+                            archived: p.archived,
+                            tags: projTagsOf(p),
+                          })
                     }
                     className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-zinc-800 bg-zinc-950 px-4 hover:bg-zinc-900"
                     style={{ width: LABEL_W, height: laneH }}
-                    title="Project options"
+                    title={armed ? `Stamp "${armed.value}"` : "Project options"}
                   >
                     <span
                       className="inline-block h-3 w-3 shrink-0 rounded-full"
                       style={{ background: colorFor(p.origin) }}
                     />
                     <span className="truncate text-sm font-medium">{p.name}</span>
+                    {ptags.length > 0 && (
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        {ptags.map((tid) => (
+                          <span
+                            key={tid}
+                            className="tag-pop h-3 w-3 rounded-full"
+                            style={{ background: tagColors[tid] ?? "#a1a1aa" }}
+                          />
+                        ))}
+                      </span>
+                    )}
                     {p.archived && (
                       <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
                         archived
@@ -350,12 +450,17 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                       const cx = xFor(n.t);
                       const left = cx - NODE / 2;
                       const top = centerY - NODE / 2;
+                      const ntags = nodeTagsOf(n);
                       return (
                         <g
                           key={n.id}
                           className="cursor-pointer"
                           opacity={n.done ? 0.4 : 1}
-                          onClick={() => setNodeMenu({ id: n.id, label: n.label })}
+                          onClick={() =>
+                            armed
+                              ? applyNodeTag(n.id, armed.id, nodeTagsOf(n))
+                              : setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n) })
+                          }
                         >
                           <g transform={`translate(${left}, ${top})`}>
                             <rect
@@ -373,6 +478,21 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                                 clipPath={`url(#clip-${n.id})`}
                               />
                             )}
+                            {ntags.map((tid, di) => {
+                              const startX = (NODE - ntags.length * 13) / 2 + 6.5;
+                              return (
+                                <circle
+                                  key={tid}
+                                  className="tag-pop"
+                                  cx={startX + di * 13}
+                                  cy={NODE - 11}
+                                  r={6}
+                                  fill={tagColors[tid] ?? "#a1a1aa"}
+                                  stroke="#00000066"
+                                  strokeWidth={0.75}
+                                />
+                              );
+                            })}
                             <title>
                               {n.label}
                               {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}
@@ -432,6 +552,18 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
           </div>
         )}
       </div>
+
+      {/* Magic-wand active banner */}
+      {armed && (
+        <div className="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-blue-400 bg-blue-600/90 px-4 py-1.5 text-sm text-white shadow backdrop-blur">
+          <span>
+            🪄 Tagging with <strong>{armed.value}</strong> — click nodes/projects
+          </span>
+          <button onClick={() => setArmed(null)} className="rounded bg-white/20 px-2 py-0.5 hover:bg-white/30">
+            Stop (Esc)
+          </button>
+        </div>
+      )}
 
       {/* Floating controls */}
       <div className="absolute bottom-6 right-4 flex flex-col items-end gap-2">
@@ -500,10 +632,41 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNodeMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
             <h2 className="mb-1 text-lg font-semibold text-zinc-100">Node</h2>
-            <p className="mb-5 text-sm text-zinc-400">{nodeMenu.label}</p>
+            <p className="mb-4 text-sm text-zinc-400">{nodeMenu.label}</p>
+
+            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+            <div className="mb-5">
+              {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+              {categories.map((c) => (
+                <div key={c.id} className="mb-2">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                  <div className="flex flex-wrap gap-1">
+                    {c.values.map((v) => {
+                      const cur = nodeTagOverride[nodeMenu.id] ?? nodeMenu.tags;
+                      const on = cur.includes(v.id);
+                      return (
+                        <button
+                          key={v.id}
+                          onClick={() => applyNodeTag(nodeMenu.id, v.id, cur)}
+                          className="rounded-full px-2 py-0.5 text-xs"
+                          style={{
+                            background: on ? v.color : "transparent",
+                            color: on ? "#fff" : "#d4d4d8",
+                            border: `1px solid ${v.color}`,
+                          }}
+                        >
+                          {v.value}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
             <div className="flex justify-end gap-2">
               <button onClick={() => setNodeMenu(null)} disabled={busy} className={ghost}>
-                Cancel
+                Close
               </button>
               <button onClick={removeNode} disabled={busy} className={danger}>
                 {busy ? "Deleting…" : "Delete node"}
@@ -520,10 +683,41 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
             {!projConfirm ? (
               <>
                 <h2 className="mb-1 text-lg font-semibold text-zinc-100">{projMenu.name}</h2>
-                <p className="mb-5 text-sm text-zinc-400">
+                <p className="mb-4 text-sm text-zinc-400">
                   {projMenu.nodeCount} node{projMenu.nodeCount === 1 ? "" : "s"} ·{" "}
                   {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
                 </p>
+
+                <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+                <div className="mb-5">
+                  {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+                  {categories.map((c) => (
+                    <div key={c.id} className="mb-2">
+                      <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                      <div className="flex flex-wrap gap-1">
+                        {c.values.map((v) => {
+                          const cur = projTagOverride[projMenu.id] ?? projMenu.tags;
+                          const on = cur.includes(v.id);
+                          return (
+                            <button
+                              key={v.id}
+                              onClick={() => applyProjTag(projMenu.id, v.id, cur)}
+                              className="rounded-full px-2 py-0.5 text-xs"
+                              style={{
+                                background: on ? v.color : "transparent",
+                                color: on ? "#fff" : "#d4d4d8",
+                                border: `1px solid ${v.color}`,
+                              }}
+                            >
+                              {v.value}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
                 <div className="flex flex-col gap-2">
                   <button onClick={doArchive} disabled={busy} className={ghost}>
                     {projMenu.archived ? "Archive again" : "Archive (hide, reversible)"}

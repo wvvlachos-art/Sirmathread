@@ -17,7 +17,8 @@
       "PowerShell(Set-Clipboard *)",
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000\" -UseBasicParsing -TimeoutSec 30; \"HTTP status: \" + $r.StatusCode } catch { \"Request error: \" + $_.Exception.Message })",
       "WebFetch(domain:supabase.com)",
-      "PowerShell($env:NODE_OPTIONS=\"--use-system-ca\"; node --env-file=.env.local supabase/seed-sample.mjs)"
+      "PowerShell($env:NODE_OPTIONS=\"--use-system-ca\"; node --env-file=.env.local supabase/seed-sample.mjs)",
+      "PowerShell($env:NODE_OPTIONS=\"--use-system-ca\"; node --env-file=.env.local supabase/seed-tags.mjs)"
     ]
   }
 }

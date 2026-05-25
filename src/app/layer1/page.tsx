@@ -5,6 +5,7 @@ import SignOutButton from "../SignOutButton";
 import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
 import NewProjectButton from "./NewProjectButton";
+import { WandProvider } from "./wand";
 
 // ---- Types -------------------------------------------------------------------
 type DbEmail = { subject: string | null; date_sent: string | null };
@@ -18,6 +19,15 @@ type DbNode = {
   origin: string;
   node_date: string | null;
   emails: DbEmail | null;
+  node_tag_values: { tag_value_id: string }[];
+};
+type DbTagValue = { id: string; value: string; color: string | null };
+type DbCategory = {
+  id: string;
+  name: string;
+  is_hide_filter: boolean;
+  sort_order: number;
+  tag_values: DbTagValue[];
 };
 type DbAmbition = {
   id: string;
@@ -40,6 +50,7 @@ type DbProject = {
   last_activity_at: string | null;
   nodes: DbNode[];
   ambitions: DbAmbition[];
+  project_tag_values: { tag_value_id: string }[];
 };
 
 const DAY = 86_400_000;
@@ -76,13 +87,15 @@ export default async function Layer1Page({
   const hideCompleted = sp.hide_completed === "1";
   const showArchived = sp.show_archived === "1";
   const inactiveOnly = sp.inactive_only === "1";
+  const selectedTags = (sp.tags ?? "").split(",").filter(Boolean);
+  const showHidden = sp.show_hidden === "1";
 
   const states = showArchived ? ["active", "archived"] : ["active"];
 
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent)), ambitions(id, title, target_date, done)"
+      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done)"
     )
     .in("state", states);
 
@@ -99,6 +112,28 @@ export default async function Layer1Page({
 
   let projects = (data ?? []) as DbProject[];
 
+  // ---- Tag catalog ----
+  const { data: catData } = await supabase
+    .from("tag_categories")
+    .select("id, name, is_hide_filter, sort_order, tag_values(id, value, color)")
+    .order("sort_order");
+  const categories = (catData ?? []) as DbCategory[];
+  const tagColors: Record<string, string> = {};
+  const hideValueIds = new Set<string>();
+  for (const c of categories) {
+    for (const v of c.tag_values ?? []) {
+      tagColors[v.id] = v.color ?? "#a1a1aa";
+      if (c.is_hide_filter) hideValueIds.add(v.id);
+    }
+  }
+  // Every tag value applied to a project, including via its nodes.
+  const projTagSet = (p: DbProject): Set<string> => {
+    const ids = new Set<string>();
+    for (const t of p.project_tag_values ?? []) ids.add(t.tag_value_id);
+    for (const n of p.nodes ?? []) for (const t of n.node_tag_values ?? []) ids.add(t.tag_value_id);
+    return ids;
+  };
+
   // ---- Filters ----
   const nowMs = Date.now();
   if (hideCompleted) projects = projects.filter((p) => !p.done);
@@ -109,6 +144,21 @@ export default async function Layer1Page({
         p.last_activity_at &&
         nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
     );
+  }
+  // Hide-filter categories (Spam / Not important) drop their projects by default.
+  if (!showHidden && hideValueIds.size) {
+    projects = projects.filter((p) => {
+      const ids = projTagSet(p);
+      for (const h of hideValueIds) if (ids.has(h)) return false;
+      return true;
+    });
+  }
+  // Tag filter: keep projects carrying any selected tag value.
+  if (selectedTags.length) {
+    projects = projects.filter((p) => {
+      const ids = projTagSet(p);
+      return selectedTags.some((t) => ids.has(t));
+    });
   }
 
   // ---- Sort ----
@@ -169,9 +219,11 @@ export default async function Layer1Page({
           done: n.done,
           deadline: n.deadline,
           origin: n.origin === "manual" ? "manual" : "gmail",
+          tags: (n.node_tag_values ?? []).map((t) => t.tag_value_id),
         };
       })
       .sort((a, b) => a.t - b.t),
+    tags: (p.project_tag_values ?? []).map((t) => t.tag_value_id),
     ambitions: (p.ambitions ?? [])
       .map((a) => ({
         id: a.id,
@@ -180,6 +232,17 @@ export default async function Layer1Page({
         done: a.done,
       }))
       .sort((a, b) => a.t - b.t),
+  }));
+
+  const tagCatalog = categories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    isHide: c.is_hide_filter,
+    values: (c.tag_values ?? []).map((v) => ({
+      id: v.id,
+      value: v.value,
+      color: v.color ?? "#a1a1aa",
+    })),
   }));
 
   return (
@@ -200,13 +263,15 @@ export default async function Layer1Page({
         </div>
       </header>
 
-      <Toolbar />
+      <WandProvider>
+        <Toolbar categories={tagCatalog} />
 
-      {lanes.length === 0 ? (
-        <div className="p-10 text-zinc-400">No projects match the current filters.</div>
-      ) : (
-        <Timeline lanes={lanes} nowMs={nowMs} />
-      )}
+        {lanes.length === 0 ? (
+          <div className="p-10 text-zinc-400">No projects match the current filters.</div>
+        ) : (
+          <Timeline lanes={lanes} nowMs={nowMs} tagColors={tagColors} categories={tagCatalog} />
+        )}
+      </WandProvider>
     </main>
   );
 }
