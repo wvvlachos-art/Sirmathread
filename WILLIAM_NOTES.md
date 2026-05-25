@@ -112,9 +112,17 @@ Read-only product. Your inbox is safe.
 - Setup involved: registering the app in Google Cloud Console, enabling Google in Supabase, and building the login screen + behind-the-scenes session handling.
 - Snag we hit & fixed: Supabase's newer-style keys (sb_publishable.../sb_secret...) were rejected by the login service, so we switched to the classic "legacy" keys (the long eyJ... ones), which work everywhere.
 
-**Layer 1 overview screen built (session 2) — first real screen!** Visit http://localhost:3000 → "Open your projects →" (or /layer1). It shows your projects as horizontal lanes on a shared month-timeline: nodes placed by date, joined by wires, with deadline nodes filling red in stages and "done" nodes muted gray. Read-only, as the spec intends. Currently shows 3 sample projects (Acme Website Redesign, Q3 Hiring, Office Move) we added so the screen isn't empty — these can be wiped anytime; they're marked with a "SAMPLE/" label.
+**Layer 1 overview screen built & expanded (session 2) — first real screen!** Visit http://localhost:3000 → "Open your projects →" (or /layer1). Projects shown as horizontal lanes on a shared **calendar timeline that spans 2 years back → 2 years forward** (scroll both ways; it auto-jumps to recent activity on load). The month axis stays frozen at the top and project names freeze on the left as you scroll. Nodes are placed by date, joined by wires; deadline nodes fill red in stages; "done" nodes go muted gray. Lanes are tall enough for labels/annotations.
 
-Next: clicking a lane should open Layer 2 (the single-project detail view with draggable context/insight/note bubbles). And connect Gmail so your real labeled threads replace the sample data.
+**Toolbar** at the top now has:
+- **Arrange** — sort lanes by Last updated / Date created / Deadline / Most inactive, with an ascending/descending toggle.
+- **Filter** — Has-a-deadline, Hide completed, Show archived, Inactive only.
+- **Tags** — placeholder for now ("coming soon"); we'll build tag filtering in a later pass but the data model already supports it.
+- Note: filter/sort choices live in the page address for now (not yet saved permanently between sessions).
+
+Currently filled with **20 dummy projects** (activity spread across the last ~6 months) so we can see how it behaves at scale. All dummy projects are marked "SAMPLE/" and can be wiped anytime. Re-seed with `node --env-file=.env.local supabase/seed-sample.mjs`.
+
+Next: clicking a lane should open Layer 2 (single-project detail with draggable context/insight/note bubbles). Build tag filtering. Connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next
 
