@@ -16,9 +16,11 @@ function iso(d: Date): string {
 export default function MiniCalendar({
   value,
   onChange,
+  minDate,
 }: {
   value: string;
   onChange: (isoDate: string) => void;
+  minDate?: string; // ISO yyyy-mm-dd; days before this are disabled
 }) {
   const selected = value || iso(new Date());
   const selDate = new Date(selected + "T00:00:00");
@@ -67,17 +69,21 @@ export default function MiniCalendar({
           const cellIso = iso(new Date(year, month, d));
           const isSel = cellIso === selected;
           const isToday = cellIso === today;
+          const disabled = minDate ? cellIso < minDate : false;
           return (
             <button
               type="button"
               key={i}
-              onClick={() => onChange(cellIso)}
+              disabled={disabled}
+              onClick={() => !disabled && onChange(cellIso)}
               className={`h-7 rounded text-xs ${
-                isSel
-                  ? "bg-zinc-100 font-medium text-zinc-900"
-                  : isToday
-                    ? "bg-zinc-800 text-zinc-100"
-                    : "text-zinc-300 hover:bg-zinc-800"
+                disabled
+                  ? "cursor-not-allowed text-zinc-700"
+                  : isSel
+                    ? "bg-zinc-100 font-medium text-zinc-900"
+                    : isToday
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-300 hover:bg-zinc-800"
               }`}
             >
               {d}

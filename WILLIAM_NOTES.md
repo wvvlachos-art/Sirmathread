@@ -126,6 +126,12 @@ Currently filled with **20 dummy projects** (activity spread across the last ~6 
 
 **Ambitions added (session 2) — the forward-looking feature!** Each project's latest node has a small **"+"** at its top-right. Click it → a box with a **mini-calendar** (European DD/MM/YYYY, week starts Monday) → set a **title + future target date** → it appears as a **round** marker out in the future, linked back by a **dashed wire** (round + dashed = "planned", vs solid squares = real past emails). **Click a round marker to tick it done** (muted + ✓); click again to reopen. Stored in a new `ambitions` table (`supabase/ambitions.sql`).
 
+**Manual projects & nodes added (session 2).** A blue **"+ New project"** button (top-right) opens a flow: name + start date → then it repeatedly asks "Add a node?" Each node is a title + date, and **a node can't be dated earlier than the previous one** (earlier days are greyed in the calendar). **Empty projects can be backdated** (no floor) so you can recreate older history. **Picking a future date automatically makes it an Ambition (round) instead of a node (square).** Each project's "+" does the same add-anytime.
+
+**Colour now means origin:** Gmail-sourced = **light green**, manual = **deep blue**. (Red stays for deadline fills; other colours reserved for tags later. Your 20 dummy projects show green.)
+
+**Deleting/archiving (session 2):** click a **node** → Delete. Click a **project name** → **Archive** (hides it, reversible — toggle "Show archived" to see it) or **Delete permanently** (asks for confirmation, listing how many nodes/ambitions go too; your Gmail is never touched). Behind the scenes this needed one database update (`supabase/manual-support.sql`, already run) that lets projects exist without a Gmail label and stamps each project/node as gmail or manual.
+
 Next: clicking a lane should open Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Build tag filtering. Connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next

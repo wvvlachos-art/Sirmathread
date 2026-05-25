@@ -2,12 +2,15 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createAmbition, toggleAmbition } from "./actions";
+import {
+  createAmbition,
+  createManualNode,
+  toggleAmbition,
+  deleteNode,
+  archiveProject,
+  deleteProject,
+} from "./actions";
 import MiniCalendar from "./MiniCalendar";
-
-// Format a date European-style: DD/MM/YYYY.
-const fmtEU = (d: string | number) =>
-  new Date(typeof d === "string" ? d + "T00:00:00" : d).toLocaleDateString("en-GB");
 
 type LaneNode = {
   id: string;
@@ -16,16 +19,21 @@ type LaneNode = {
   stage: number;
   done: boolean;
   deadline: string | null;
+  origin: string;
 };
 type Ambition = { id: string; title: string; t: number; done: boolean };
 type Lane = {
   id: string;
   name: string;
-  color: string;
+  origin: string;
   archived: boolean;
   nodes: LaneNode[];
   ambitions: Ambition[];
 };
+
+const GMAIL_COLOR = "#34d399"; // light green
+const MANUAL_COLOR = "#2563eb"; // deep blue
+const colorFor = (origin: string) => (origin === "manual" ? MANUAL_COLOR : GMAIL_COLOR);
 
 const DAY = 86_400_000;
 const NODE = 48;
@@ -34,7 +42,7 @@ const AXIS_H = 46;
 const LABEL_W = 220;
 const LANES_PER_SCREEN = 5;
 const MIN_LANE_H = 120;
-const CHUNK_DAYS = 60; // "Earlier"/"Later" step (default 2 months)
+const CHUNK_DAYS = 60;
 const MAX_SPAN_DAYS = 5 * 365;
 const INITIAL_BACK = 120;
 const INITIAL_FWD = 60;
@@ -45,6 +53,11 @@ const ZOOMS = [
   { days: 90, label: "3m" },
   { days: 180, label: "6m" },
 ];
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const isoFromMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const fmtEU = (d: string | number) =>
+  new Date(typeof d === "string" ? d + "T00:00:00" : d).toLocaleDateString("en-GB");
 
 export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: number }) {
   const router = useRouter();
@@ -57,12 +70,19 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
   const [endMs, setEndMs] = useState(nowMs + INITIAL_FWD * DAY);
   const [vw, setVw] = useState(0);
   const [vh, setVh] = useState(0);
-
-  // Ambition creation form state.
-  const [newAmb, setNewAmb] = useState<{ projectId: string; projectName: string } | null>(null);
-  const [ambTitle, setAmbTitle] = useState("");
-  const [ambDate, setAmbDate] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Add (node or ambition) modal.
+  const [addTo, setAddTo] = useState<{ projectId: string; projectName: string; minDate: string } | null>(null);
+  const [addTitle, setAddTitle] = useState("");
+  const [addDate, setAddDate] = useState(todayIso());
+
+  // Node and project action menus.
+  const [nodeMenu, setNodeMenu] = useState<{ id: string; label: string } | null>(null);
+  const [projMenu, setProjMenu] = useState<
+    { id: string; name: string; nodeCount: number; ambitionCount: number; archived: boolean } | null
+  >(null);
+  const [projConfirm, setProjConfirm] = useState(false);
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -119,27 +139,59 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
     scrollRef.current?.scrollTo({ left: Math.max(0, todayX - vw * 0.65), behavior: "smooth" });
   };
 
-  const openNew = (projectId: string, projectName: string) => {
-    setAmbTitle("");
-    setAmbDate(new Date(Date.now() + 30 * DAY).toISOString().slice(0, 10));
-    setNewAmb({ projectId, projectName });
+  const openAdd = (projectId: string, projectName: string, minDate: string) => {
+    setAddTitle("");
+    setAddDate(minDate > todayIso() ? minDate : todayIso());
+    setAddTo({ projectId, projectName, minDate });
   };
-  const submitAmb = async (e: React.FormEvent) => {
+  const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAmb) return;
+    if (!addTo) return;
     setBusy(true);
-    const res = await createAmbition(newAmb.projectId, ambTitle, ambDate);
+    const isFuture = addDate > todayIso();
+    const res = isFuture
+      ? await createAmbition(addTo.projectId, addTitle, addDate)
+      : await createManualNode(addTo.projectId, addTitle, addDate);
     setBusy(false);
     if (res.error) {
-      alert("Could not create ambition: " + res.error);
+      alert("Could not add: " + res.error);
       return;
     }
-    setNewAmb(null);
+    setAddTo(null);
     router.refresh();
   };
+
   const toggle = async (id: string, done: boolean) => {
     await toggleAmbition(id, done);
     router.refresh();
+  };
+  const removeNode = async () => {
+    if (!nodeMenu) return;
+    setBusy(true);
+    await deleteNode(nodeMenu.id);
+    setBusy(false);
+    setNodeMenu(null);
+    router.refresh();
+  };
+  const doArchive = async () => {
+    if (!projMenu) return;
+    setBusy(true);
+    await archiveProject(projMenu.id);
+    setBusy(false);
+    closeProj();
+    router.refresh();
+  };
+  const doDelete = async () => {
+    if (!projMenu) return;
+    setBusy(true);
+    await deleteProject(projMenu.id);
+    setBusy(false);
+    closeProj();
+    router.refresh();
+  };
+  const closeProj = () => {
+    setProjMenu(null);
+    setProjConfirm(false);
   };
 
   // Axis pieces.
@@ -151,7 +203,7 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
     while (cur.getTime() <= endMs) {
       months.push({
         x: xFor(cur.getTime()),
-        label: cur.toLocaleString("en-US", { month: "short", year: "numeric" }),
+        label: cur.toLocaleString("en-GB", { month: "short", year: "numeric" }),
       });
       cur.setMonth(cur.getMonth() + 1);
     }
@@ -161,14 +213,17 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
   }
   const showDayNumbers = pxPerDay >= 16;
 
-  const btn =
-    "rounded-md border border-zinc-700 bg-zinc-900/90 px-2.5 py-1 text-sm text-zinc-200 hover:bg-zinc-800";
+  const btn = "rounded-md border border-zinc-700 bg-zinc-900/90 px-2.5 py-1 text-sm text-zinc-200 hover:bg-zinc-800";
   const zoomBtn = (active: boolean) =>
     `rounded-md px-2.5 py-1 text-sm ${
       active
         ? "bg-zinc-100 text-zinc-900"
         : "border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:bg-zinc-800"
     }`;
+  const card = "w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+  const primary = "rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60";
+  const ghost = "rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800";
+  const danger = "rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60";
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -216,16 +271,29 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
               const anchorX = last ? xFor(last.t) : todayX;
               const plusX = anchorX + (last ? NODE / 2 : 0);
               const plusY = centerY - (last ? NODE / 2 : 14);
+              // Floor only at the latest node (keeps chains in order). An empty
+              // project has no floor, so you can backdate when recreating history.
+              const minDate = last ? isoFromMs(last.t) : "";
 
               return (
                 <div key={p.id} className="flex">
                   <div
-                    className="sticky left-0 z-10 flex items-center gap-2 border-b border-r border-zinc-800 bg-zinc-950 px-4"
+                    onClick={() =>
+                      setProjMenu({
+                        id: p.id,
+                        name: p.name,
+                        nodeCount: p.nodes.length,
+                        ambitionCount: p.ambitions.length,
+                        archived: p.archived,
+                      })
+                    }
+                    className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-zinc-800 bg-zinc-950 px-4 hover:bg-zinc-900"
                     style={{ width: LABEL_W, height: laneH }}
+                    title="Project options"
                   >
                     <span
                       className="inline-block h-3 w-3 shrink-0 rounded-full"
-                      style={{ background: p.color }}
+                      style={{ background: colorFor(p.origin) }}
                     />
                     <span className="truncate text-sm font-medium">{p.name}</span>
                     {p.archived && (
@@ -249,7 +317,6 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                     ))}
                     <line x1={todayX} y1={0} x2={todayX} y2={laneH} stroke="#3f3722" />
 
-                    {/* wires between real nodes */}
                     {p.nodes.map((n, i) =>
                       i === 0 ? null : (
                         <line
@@ -264,7 +331,6 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                       )
                     )}
 
-                    {/* dashed wires from the latest node to each ambition */}
                     {p.ambitions.map((a) => (
                       <line
                         key={`aw-${a.id}`}
@@ -278,20 +344,25 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                       />
                     ))}
 
-                    {/* real (square) nodes */}
+                    {/* square nodes */}
                     {p.nodes.map((n) => {
                       const cx = xFor(n.t);
                       const left = cx - NODE / 2;
                       const top = centerY - NODE / 2;
                       return (
-                        <g key={n.id} opacity={n.done ? 0.4 : 1}>
+                        <g
+                          key={n.id}
+                          className="cursor-pointer"
+                          opacity={n.done ? 0.4 : 1}
+                          onClick={() => setNodeMenu({ id: n.id, label: n.label })}
+                        >
                           <g transform={`translate(${left}, ${top})`}>
                             <rect
                               width={NODE}
                               height={NODE}
                               rx={10}
                               ry={10}
-                              fill={n.done ? "#6b7280" : p.color}
+                              fill={n.done ? "#6b7280" : colorFor(n.origin)}
                             />
                             {!n.done && n.stage > 0 && (
                               <rect
@@ -314,7 +385,7 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                       );
                     })}
 
-                    {/* ambitions (round) */}
+                    {/* round ambitions */}
                     {p.ambitions.map((a) => {
                       const cx = xFor(a.t);
                       return (
@@ -323,7 +394,7 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                             cx={cx}
                             cy={centerY}
                             r={AMB_R}
-                            fill={a.done ? "#3f3f46" : p.color}
+                            fill={a.done ? "#3f3f46" : colorFor(p.origin)}
                             fillOpacity={a.done ? 0.5 : 0.9}
                             stroke="#e4e4e7"
                             strokeWidth={1.5}
@@ -338,26 +409,20 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
                             Ambition: {a.title} — target {fmtEU(a.t)}
                             {a.done ? " (done — click to reopen)" : " (click to mark done)"}
                           </title>
-                          <text
-                            x={cx}
-                            y={centerY + AMB_R + 15}
-                            fill="#a1a1aa"
-                            fontSize={11}
-                            textAnchor="middle"
-                          >
+                          <text x={cx} y={centerY + AMB_R + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
                             {a.title.length > 26 ? a.title.slice(0, 25) + "…" : a.title}
                           </text>
                         </g>
                       );
                     })}
 
-                    {/* "+" to add an ambition, at the top-right of the latest node */}
-                    <g className="cursor-pointer" onClick={() => openNew(p.id, p.name)}>
+                    {/* "+" to add a node/ambition */}
+                    <g className="cursor-pointer" onClick={() => openAdd(p.id, p.name, minDate)}>
                       <circle cx={plusX} cy={plusY} r={10} fill="#18181b" stroke="#a1a1aa" strokeWidth={1.5} />
                       <text x={plusX} y={plusY + 4} fill="#e4e4e7" fontSize={14} textAnchor="middle">
                         +
                       </text>
-                      <title>Add an ambition to {p.name}</title>
+                      <title>Add a node or ambition to {p.name}</title>
                     </g>
                   </svg>
                 </div>
@@ -390,53 +455,105 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
         </div>
       </div>
 
-      {/* New-ambition modal */}
-      {newAmb && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !busy && setNewAmb(null)}
-        >
-          <form
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={submitAmb}
-            className="w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl"
-          >
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">New ambition</h2>
-            <p className="mb-4 text-sm text-zinc-400">for {newAmb.projectName}</p>
+      {/* Add node/ambition modal */}
+      {addTo && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setAddTo(null)}>
+          <form onClick={(e) => e.stopPropagation()} onSubmit={submitAdd} className={card}>
+            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Add to {addTo.projectName}</h2>
+            <p className="mb-4 text-sm text-zinc-400">A future date becomes an Ambition; today/past becomes a node.</p>
 
             <label className="mb-1 block text-sm text-zinc-300">Title</label>
             <input
               autoFocus
-              value={ambTitle}
-              onChange={(e) => setAmbTitle(e.target.value)}
-              placeholder="e.g. Ship v1 to first customer"
+              value={addTitle}
+              onChange={(e) => setAddTitle(e.target.value)}
+              placeholder="e.g. Kickoff meeting"
               className="mb-4 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
             />
 
-            <label className="mb-1 block text-sm text-zinc-300">Target date</label>
-            <MiniCalendar value={ambDate} onChange={setAmbDate} />
-            <p className="mb-5 mt-1 text-xs text-zinc-500">
-              Selected: {ambDate ? fmtEU(ambDate) : "—"}
+            <label className="mb-1 block text-sm text-zinc-300">Date</label>
+            <MiniCalendar value={addDate} onChange={setAddDate} minDate={addTo.minDate} />
+            <p className="mb-1 mt-1 text-xs text-zinc-500">Selected: {fmtEU(addDate)}</p>
+            <p className="mb-5 text-xs">
+              {addDate > todayIso() ? (
+                <span className="text-blue-400">Future → Ambition (round)</span>
+              ) : (
+                <span className="text-zinc-500">Today/past → node (square)</span>
+              )}
             </p>
 
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setNewAmb(null)}
-                disabled={busy}
-                className="rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-              >
+              <button type="button" onClick={() => setAddTo(null)} disabled={busy} className={ghost}>
                 Cancel
               </button>
-              <button
-                type="submit"
-                disabled={busy}
-                className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60"
-              >
-                {busy ? "Saving…" : "Create"}
+              <button type="submit" disabled={busy} className={primary}>
+                {busy ? "Adding…" : "Add"}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Node actions */}
+      {nodeMenu && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNodeMenu(null)}>
+          <div onClick={(e) => e.stopPropagation()} className={card}>
+            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Node</h2>
+            <p className="mb-5 text-sm text-zinc-400">{nodeMenu.label}</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setNodeMenu(null)} disabled={busy} className={ghost}>
+                Cancel
+              </button>
+              <button onClick={removeNode} disabled={busy} className={danger}>
+                {busy ? "Deleting…" : "Delete node"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project actions */}
+      {projMenu && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && closeProj()}>
+          <div onClick={(e) => e.stopPropagation()} className={card}>
+            {!projConfirm ? (
+              <>
+                <h2 className="mb-1 text-lg font-semibold text-zinc-100">{projMenu.name}</h2>
+                <p className="mb-5 text-sm text-zinc-400">
+                  {projMenu.nodeCount} node{projMenu.nodeCount === 1 ? "" : "s"} ·{" "}
+                  {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
+                </p>
+                <div className="flex flex-col gap-2">
+                  <button onClick={doArchive} disabled={busy} className={ghost}>
+                    {projMenu.archived ? "Archive again" : "Archive (hide, reversible)"}
+                  </button>
+                  <button onClick={() => setProjConfirm(true)} disabled={busy} className={danger}>
+                    Delete permanently…
+                  </button>
+                  <button onClick={closeProj} disabled={busy} className="mt-1 text-sm text-zinc-500 hover:text-zinc-300">
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="mb-1 text-lg font-semibold text-zinc-100">Delete {projMenu.name}?</h2>
+                <p className="mb-5 text-sm text-zinc-400">
+                  This permanently removes the project and its {projMenu.nodeCount} node
+                  {projMenu.nodeCount === 1 ? "" : "s"} and {projMenu.ambitionCount} ambition
+                  {projMenu.ambitionCount === 1 ? "" : "s"}. Gmail is never touched. This can&apos;t be undone.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setProjConfirm(false)} disabled={busy} className={ghost}>
+                    Back
+                  </button>
+                  <button onClick={doDelete} disabled={busy} className={danger}>
+                    {busy ? "Deleting…" : "Delete permanently"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import SignOutButton from "../SignOutButton";
 import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
+import NewProjectButton from "./NewProjectButton";
 
 // ---- Types -------------------------------------------------------------------
 type DbEmail = { subject: string | null; date_sent: string | null };
@@ -14,6 +15,8 @@ type DbNode = {
   deadline_set_at: string | null;
   done: boolean;
   state: string;
+  origin: string;
+  node_date: string | null;
   emails: DbEmail | null;
 };
 type DbAmbition = {
@@ -25,7 +28,8 @@ type DbAmbition = {
 type DbProject = {
   id: string;
   display_name: string | null;
-  gmail_label_name: string;
+  gmail_label_name: string | null;
+  origin: string;
   color: string | null;
   deadline: string | null;
   deadline_set_at: string | null;
@@ -75,12 +79,23 @@ export default async function Layer1Page({
 
   const states = showArchived ? ["active", "archived"] : ["active"];
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, display_name, gmail_label_name, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, nodes(id, display_label, deadline, deadline_set_at, done, state, emails(subject, date_sent)), ambitions(id, title, target_date, done)"
+      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent)), ambitions(id, title, target_date, done)"
     )
     .in("state", states);
+
+  if (error) {
+    return (
+      <main className="flex h-screen flex-col items-center justify-center gap-3 bg-zinc-950 p-10 text-center text-zinc-300">
+        <p className="text-lg font-medium">Couldn&apos;t load your projects.</p>
+        <p className="max-w-md text-sm text-zinc-500">
+          A database update may still be pending. Details: {error.message}
+        </p>
+      </main>
+    );
+  }
 
   let projects = (data ?? []) as DbProject[];
 
@@ -116,19 +131,23 @@ export default async function Layer1Page({
   // ---- Shape the data for the timeline ----
   const lanes = projects.map((p) => ({
     id: p.id,
-    name: p.display_name ?? p.gmail_label_name,
-    color: p.color ?? "#71717a",
+    name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
+    origin: p.origin === "manual" ? "manual" : "gmail",
     archived: p.state === "archived",
     nodes: (p.nodes ?? [])
-      .filter((n) => n.state === "promoted" && n.emails?.date_sent)
-      .map((n) => ({
-        id: n.id,
-        label: n.display_label ?? n.emails!.subject ?? "(untitled)",
-        t: new Date(n.emails!.date_sent!).getTime(),
-        stage: deadlineStage(n.deadline, n.deadline_set_at),
-        done: n.done,
-        deadline: n.deadline,
-      }))
+      .filter((n) => n.state === "promoted" && (n.emails?.date_sent || n.node_date))
+      .map((n) => {
+        const dateStr = n.emails?.date_sent ?? n.node_date!;
+        return {
+          id: n.id,
+          label: n.display_label ?? n.emails?.subject ?? "(untitled)",
+          t: new Date(dateStr).getTime(),
+          stage: deadlineStage(n.deadline, n.deadline_set_at),
+          done: n.done,
+          deadline: n.deadline,
+          origin: n.origin === "manual" ? "manual" : "gmail",
+        };
+      })
       .sort((a, b) => a.t - b.t),
     ambitions: (p.ambitions ?? [])
       .map((a) => ({
@@ -152,6 +171,7 @@ export default async function Layer1Page({
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <NewProjectButton />
           <span className="text-sm text-zinc-400">{user.email}</span>
           <SignOutButton />
         </div>
