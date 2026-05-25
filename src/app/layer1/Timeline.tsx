@@ -90,6 +90,15 @@ const WAND_SVG =
 const WAND_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(WAND_SVG)}") 21 6, crosshair`;
 
 // Arrange tag dots like dice pips so several tags pack neatly inside a node.
+// Idle note size band: from a small dot up to a bit wider than a node and
+// ~80% its height. Stored per-note in the browser.
+const NOTE_MIN_W = 14;
+const NOTE_MAX_W = 56;
+const NOTE_MAX_H = 38;
+const NOTE_DEFAULT_W = 48;
+const NOTE_SIZES_KEY = "sirma:noteSizes";
+const noteHeight = (w: number) => Math.max(NOTE_MIN_W, Math.min(NOTE_MAX_H, Math.round(w * 0.68)));
+
 const DICE: Record<number, [number, number][]> = {
   1: [[1, 1]],
   2: [[0, 0], [2, 2]],
@@ -173,6 +182,9 @@ export default function Timeline({
   const [draggingNote, setDraggingNote] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
+  const [noteSizes, setNoteSizes] = useState<Record<string, number>>({});
+  const sizeRef = useRef<{ id: string; w: number } | null>(null);
+  const [resizingNote, setResizingNote] = useState<string | null>(null);
   const [projMenu, setProjMenu] = useState<
     {
       id: string;
@@ -361,6 +373,22 @@ export default function Timeline({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [armed, setArmed]);
+
+  useEffect(() => {
+    try {
+      const r = localStorage.getItem(NOTE_SIZES_KEY);
+      if (r) setNoteSizes(JSON.parse(r));
+    } catch {}
+  }, []);
+  const setNoteSize = (id: string, w: number) => {
+    setNoteSizes((prev) => {
+      const next = { ...prev, [id]: w };
+      try {
+        localStorage.setItem(NOTE_SIZES_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
 
   // Current tags for a node/project, respecting any optimistic override.
   const nodeTagsOf = (n: LaneNode) => nodeTagOverride[n.id] ?? n.tags;
@@ -763,13 +791,11 @@ export default function Timeline({
                           touchAction: "none",
                           zIndex: isEditing ? 20 : 10,
                         }}
-                        className={`cursor-grab select-none rounded-md border border-amber-500/70 bg-amber-100 text-amber-950 shadow ${
-                          isEditing ? "p-2" : "px-2 py-1"
-                        }`}
-                        title={isEditing ? "" : "Click to open · drag to move"}
+                        className="cursor-grab select-none"
+                        title={isEditing ? "" : "Click to open · drag to move · corner to resize"}
                       >
                         {isEditing ? (
-                          <div className="flex flex-col gap-1">
+                          <div className="flex flex-col gap-1 rounded-md border border-amber-500/70 bg-amber-100 p-2 text-amber-950 shadow">
                             <textarea
                               autoFocus
                               value={editBody}
@@ -788,9 +814,39 @@ export default function Timeline({
                             </button>
                           </div>
                         ) : (
-                          <span className="line-clamp-3 block max-w-[150px] whitespace-pre-wrap break-words text-xs">
-                            {nt.body || "(empty note)"}
-                          </span>
+                          <div className="relative">
+                            <div
+                              className="overflow-hidden rounded-md border border-amber-500/70 bg-amber-100 shadow"
+                              style={{ width: noteSizes[nt.id] ?? NOTE_DEFAULT_W, height: noteHeight(noteSizes[nt.id] ?? NOTE_DEFAULT_W) }}
+                            >
+                              <span className="block whitespace-pre-wrap break-words px-1 py-0.5 text-[10px] leading-tight text-amber-950 line-clamp-2">
+                                {nt.body}
+                              </span>
+                            </div>
+                            <div
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.currentTarget.setPointerCapture(e.pointerId);
+                                sizeRef.current = { id: nt.id, w: noteSizes[nt.id] ?? NOTE_DEFAULT_W };
+                                setResizingNote(nt.id);
+                              }}
+                              onPointerMove={(e) => {
+                                if (resizingNote !== nt.id || !sizeRef.current) return;
+                                const nw = Math.max(NOTE_MIN_W, Math.min(NOTE_MAX_W, sizeRef.current.w + e.movementX));
+                                sizeRef.current.w = nw;
+                                setNoteSize(nt.id, nw);
+                              }}
+                              onPointerUp={(e) => {
+                                if (resizingNote !== nt.id) return;
+                                e.stopPropagation();
+                                e.currentTarget.releasePointerCapture(e.pointerId);
+                                setResizingNote(null);
+                                sizeRef.current = null;
+                              }}
+                              className="absolute -bottom-1 -right-1 h-3 w-3 cursor-se-resize rounded-full border border-amber-700 bg-amber-300"
+                              title="Drag to resize"
+                            />
+                          </div>
                         )}
                       </div>
                     );
