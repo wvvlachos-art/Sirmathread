@@ -24,6 +24,7 @@ export default function NewProjectButton() {
   const [floor, setFloor] = useState(todayIso());
   const [nodeTitle, setNodeTitle] = useState("");
   const [nodeDate, setNodeDate] = useState(todayIso());
+  const [nodeAsDeadline, setNodeAsDeadline] = useState(false);
 
   const open = () => {
     setProjName("");
@@ -54,6 +55,7 @@ export default function NewProjectButton() {
   const startNode = () => {
     setNodeTitle("");
     setNodeDate(floor);
+    setNodeAsDeadline(false);
     setStep("node");
   };
 
@@ -64,7 +66,7 @@ export default function NewProjectButton() {
     // A future date becomes an Ambition (round); today/past becomes a node (square).
     const isFuture = nodeDate > todayIso();
     const res = isFuture
-      ? await createAmbition(projectId, nodeTitle, nodeDate)
+      ? await createAmbition(projectId, nodeTitle, nodeDate, nodeAsDeadline)
       : await createManualNode(projectId, nodeTitle, nodeDate);
     setBusy(false);
     if (res.error) {
@@ -164,13 +166,23 @@ export default function NewProjectButton() {
                 <p className="mb-1 mt-1 text-xs text-zinc-500">
                   Selected: {fmtEU(nodeDate)} · can&apos;t be before {fmtEU(floor)}
                 </p>
-                <p className="mb-5 text-xs">
+                <p className="mb-2 text-xs">
                   {nodeDate > todayIso() ? (
                     <span className="text-blue-400">Future date → added as an Ambition (round)</span>
                   ) : (
                     <span className="text-zinc-500">Today or past → added as a node (square)</span>
                   )}
                 </p>
+                {nodeDate > todayIso() && (
+                  <label className="mb-5 flex items-center gap-2 text-sm text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={nodeAsDeadline}
+                      onChange={(e) => setNodeAsDeadline(e.target.checked)}
+                    />
+                    Also set as a deadline (red countdown)
+                  </label>
+                )}
 
                 <div className="flex justify-end gap-2">
                   <button type="button" onClick={() => setStep("prompt")} disabled={busy} className={ghost}>

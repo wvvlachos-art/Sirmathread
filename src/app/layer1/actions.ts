@@ -8,7 +8,8 @@ import { revalidatePath } from "next/cache";
 export async function createAmbition(
   projectId: string,
   title: string,
-  targetDate: string
+  targetDate: string,
+  isDeadline = false
 ): Promise<{ error?: string }> {
   const clean = title.trim();
   if (!clean) return { error: "Title is required." };
@@ -17,9 +18,41 @@ export async function createAmbition(
   const supabase = await createClient();
   const { error } = await supabase
     .from("ambitions")
-    .insert({ project_id: projectId, title: clean, target_date: targetDate });
+    .insert({ project_id: projectId, title: clean, target_date: targetDate, is_deadline: isDeadline });
   if (error) return { error: error.message };
 
+  revalidatePath("/layer1");
+  return {};
+}
+
+// Set / clear a node's deadline; the countdown runs from now → the date.
+export async function setNodeDeadline(id: string, date: string): Promise<{ error?: string }> {
+  if (!date) return { error: "Date is required." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("nodes")
+    .update({ deadline: date, deadline_set_at: new Date().toISOString(), done: false })
+    .eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function clearNodeDeadline(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("nodes")
+    .update({ deadline: null, deadline_set_at: null, done: false })
+    .eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function setNodeDone(id: string, done: boolean): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("nodes").update({ done }).eq("id", id);
+  if (error) return { error: error.message };
   revalidatePath("/layer1");
   return {};
 }
@@ -244,6 +277,49 @@ export async function archiveProject(id: string): Promise<{ error?: string }> {
 export async function deleteProject(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("projects").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+// ---- Notes (Layer 1, draggable, user-written) ----------------------------
+export async function createNote(
+  projectId: string,
+  nodeId: string | null,
+  body: string,
+  x: number,
+  y: number
+): Promise<{ id?: string; error?: string }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("notes")
+    .insert({ project_id: projectId, node_id: nodeId, body, x, y })
+    .select("id")
+    .single();
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return { id: data.id };
+}
+
+// Drag reposition — no revalidate (kept optimistic on the client for smoothness).
+export async function updateNotePosition(id: string, x: number, y: number): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("notes").update({ x, y }).eq("id", id);
+  if (error) return { error: error.message };
+  return {};
+}
+
+export async function updateNoteBody(id: string, body: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("notes").update({ body }).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function deleteNote(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) return { error: error.message };
   revalidatePath("/layer1");
   return {};

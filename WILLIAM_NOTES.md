@@ -138,7 +138,11 @@ Currently filled with **20 dummy projects** (activity spread across the last ~6 
 
 **Tags Manage panel done (session 2):** Tags → Manage is now a full editor — create/rename categories, add/rename values, pick each value's colour, toggle a category as a hide-filter, and delete categories/values (with a confirm, since it removes the tag from any projects/nodes using it).
 
-Next: clicking a lane opens Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Connect Gmail so real labeled threads replace the dummy data.
+**Deadlines added (session 2).** Click a **node** → its menu has **"Set deadline"** → mini-calendar → a **red countdown** fills the node in stages (from today → the date); the menu then offers **✓ Complete** (mutes it) and **Clear deadline**. **Ambitions** can optionally be deadlines: when you create a future item, tick **"Also set as a deadline"** and the round ambition gets the red countdown (from the day you made it → its target date); clicking it marks it done. (One-line DB addition `supabase/ambition-deadline.sql`, already run.)
+
+**Notes added (session 2) — Layer 1 complete!** Each project's **"+"** now asks **📝 Note or ◯ Ambition**. A note appears in **amber** by the latest node, joined by a **dotted line**. **Drag** a note anywhere in its lane (the dotted line follows); a plain **click opens it** into a bigger box for easy reading/editing (idle notes clamp to ~3 lines so text never overflows); **Delete** is inside the opened box. (No DB change — the notes table already existed.)
+
+Next: **Layer 2** — clicking a lane opens the single-project detail view with draggable context/insight/note bubbles and curved wires. Also pending: make Ambitions/Earlier-Later configurable; connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next
 

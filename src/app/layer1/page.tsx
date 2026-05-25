@@ -34,6 +34,8 @@ type DbAmbition = {
   title: string;
   target_date: string;
   done: boolean;
+  is_deadline: boolean;
+  created_at: string;
 };
 type DbProject = {
   id: string;
@@ -51,6 +53,7 @@ type DbProject = {
   nodes: DbNode[];
   ambitions: DbAmbition[];
   project_tag_values: { tag_value_id: string }[];
+  notes: { id: string; node_id: string | null; body: string | null; x: number | null; y: number | null }[];
 };
 
 const DAY = 86_400_000;
@@ -95,7 +98,7 @@ export default async function Layer1Page({
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done)"
+      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
     )
     .in("state", states);
 
@@ -198,16 +201,8 @@ export default async function Layer1Page({
   }
 
   // ---- Shape the data for the timeline ----
-  const lanes = projects.map((p) => ({
-    id: p.id,
-    name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
-    origin: p.origin === "manual" ? "manual" : "gmail",
-    archived: p.state === "archived",
-    inactive: !!(
-      p.last_activity_at &&
-      nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
-    ),
-    nodes: (p.nodes ?? [])
+  const lanes = projects.map((p) => {
+    const nodes = (p.nodes ?? [])
       .filter((n) => n.state === "promoted" && (n.emails?.date_sent || n.node_date))
       .map((n) => {
         const dateStr = n.emails?.date_sent ?? n.node_date!;
@@ -222,17 +217,44 @@ export default async function Layer1Page({
           tags: (n.node_tag_values ?? []).map((t) => t.tag_value_id),
         };
       })
-      .sort((a, b) => a.t - b.t),
-    tags: (p.project_tag_values ?? []).map((t) => t.tag_value_id),
-    ambitions: (p.ambitions ?? [])
-      .map((a) => ({
-        id: a.id,
-        title: a.title,
-        t: new Date(a.target_date).getTime(),
-        done: a.done,
-      }))
-      .sort((a, b) => a.t - b.t),
-  }));
+      .sort((a, b) => a.t - b.t);
+
+    const nodeTimeById: Record<string, number> = {};
+    for (const n of nodes) nodeTimeById[n.id] = n.t;
+    const lastT = nodes.length ? nodes[nodes.length - 1].t : nowMs;
+
+    const notes = (p.notes ?? []).map((nt) => ({
+      id: nt.id,
+      body: nt.body ?? "",
+      x: typeof nt.x === "number" ? nt.x : lastT,
+      y: typeof nt.y === "number" ? nt.y : -60,
+      anchorT: (nt.node_id && nodeTimeById[nt.node_id]) || lastT,
+    }));
+
+    return {
+      id: p.id,
+      name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
+      origin: p.origin === "manual" ? "manual" : "gmail",
+      archived: p.state === "archived",
+      inactive: !!(
+        p.last_activity_at &&
+        nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
+      ),
+      nodes,
+      tags: (p.project_tag_values ?? []).map((t) => t.tag_value_id),
+      ambitions: (p.ambitions ?? [])
+        .map((a) => ({
+          id: a.id,
+          title: a.title,
+          t: new Date(a.target_date).getTime(),
+          done: a.done,
+          isDeadline: a.is_deadline,
+          stage: a.is_deadline ? deadlineStage(a.target_date, a.created_at) : 0,
+        }))
+        .sort((a, b) => a.t - b.t),
+      notes,
+    };
+  });
 
   const tagCatalog = categories.map((c) => ({
     id: c.id,

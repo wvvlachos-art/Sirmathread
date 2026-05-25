@@ -11,6 +11,13 @@ import {
   deleteProject,
   toggleProjectTag,
   toggleNodeTag,
+  setNodeDeadline,
+  clearNodeDeadline,
+  setNodeDone,
+  createNote,
+  updateNotePosition,
+  updateNoteBody,
+  deleteNote,
 } from "./actions";
 import MiniCalendar from "./MiniCalendar";
 import { useWand } from "./wand";
@@ -32,7 +39,8 @@ type LaneNode = {
   origin: string;
   tags: string[];
 };
-type Ambition = { id: string; title: string; t: number; done: boolean };
+type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number };
+type Note = { id: string; body: string; x: number; y: number; anchorT: number };
 type Lane = {
   id: string;
   name: string;
@@ -42,6 +50,7 @@ type Lane = {
   nodes: LaneNode[];
   ambitions: Ambition[];
   tags: string[];
+  notes: Note[];
 };
 
 const GMAIL_COLOR = "#34d399"; // light green
@@ -145,7 +154,25 @@ export default function Timeline({
   const [addDate, setAddDate] = useState(todayIso());
 
   // Node and project action menus.
-  const [nodeMenu, setNodeMenu] = useState<{ id: string; label: string; tags: string[] } | null>(null);
+  const [nodeMenu, setNodeMenu] = useState<
+    { id: string; label: string; tags: string[]; deadline: string | null; done: boolean } | null
+  >(null);
+  const [nodeCalOpen, setNodeCalOpen] = useState(false);
+  const [nodeCalDate, setNodeCalDate] = useState(todayIso());
+  const [addAsDeadline, setAddAsDeadline] = useState(false);
+  const [addChoice, setAddChoice] = useState<
+    { projectId: string; projectName: string; minDate: string; anchorNodeId: string | null; anchorT: number } | null
+  >(null);
+  const [noteCompose, setNoteCompose] = useState<
+    { projectId: string; anchorNodeId: string | null; anchorT: number } | null
+  >(null);
+  const [noteBody, setNoteBody] = useState("");
+  const [noteOverride, setNoteOverride] = useState<Record<string, { x: number; y: number }>>({});
+  const noteOverrideRef = useRef<Record<string, { x: number; y: number }>>({});
+  const noteDragRef = useRef<{ id: string; moved: boolean; dist: number } | null>(null);
+  const [draggingNote, setDraggingNote] = useState<string | null>(null);
+  const [editingNote, setEditingNote] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState("");
   const [projMenu, setProjMenu] = useState<
     {
       id: string;
@@ -219,6 +246,7 @@ export default function Timeline({
   const openAdd = (projectId: string, projectName: string, minDate: string) => {
     setAddTitle("");
     setAddDate(minDate > todayIso() ? minDate : todayIso());
+    setAddAsDeadline(false);
     setAddTo({ projectId, projectName, minDate });
   };
   const submitAdd = async (e: React.FormEvent) => {
@@ -227,7 +255,7 @@ export default function Timeline({
     setBusy(true);
     const isFuture = addDate > todayIso();
     const res = isFuture
-      ? await createAmbition(addTo.projectId, addTitle, addDate)
+      ? await createAmbition(addTo.projectId, addTitle, addDate, addAsDeadline)
       : await createManualNode(addTo.projectId, addTitle, addDate);
     setBusy(false);
     if (res.error) {
@@ -248,6 +276,59 @@ export default function Timeline({
     await deleteNode(nodeMenu.id);
     setBusy(false);
     setNodeMenu(null);
+    router.refresh();
+  };
+  const saveNodeDeadline = async () => {
+    if (!nodeMenu) return;
+    setBusy(true);
+    const res = await setNodeDeadline(nodeMenu.id, nodeCalDate);
+    setBusy(false);
+    if (res.error) {
+      alert(res.error);
+      return;
+    }
+    setNodeMenu(null);
+    setNodeCalOpen(false);
+    router.refresh();
+  };
+  const removeNodeDeadline = async () => {
+    if (!nodeMenu) return;
+    setBusy(true);
+    await clearNodeDeadline(nodeMenu.id);
+    setBusy(false);
+    setNodeMenu(null);
+    router.refresh();
+  };
+  const completeNode = async (done: boolean) => {
+    if (!nodeMenu) return;
+    setBusy(true);
+    await setNodeDone(nodeMenu.id, done);
+    setBusy(false);
+    setNodeMenu(null);
+    router.refresh();
+  };
+
+  const noteOf = (nt: Note) => noteOverride[nt.id] ?? { x: nt.x, y: nt.y };
+  const submitNote = async () => {
+    if (!noteCompose) return;
+    setBusy(true);
+    const res = await createNote(noteCompose.projectId, noteCompose.anchorNodeId, noteBody, noteCompose.anchorT, -60);
+    setBusy(false);
+    if (res.error) {
+      alert(res.error);
+      return;
+    }
+    setNoteCompose(null);
+    setNoteBody("");
+    router.refresh();
+  };
+  const saveNoteBody = async (id: string) => {
+    setEditingNote(null);
+    await updateNoteBody(id, editBody);
+    router.refresh();
+  };
+  const removeNoteById = async (id: string) => {
+    await deleteNote(id);
     router.refresh();
   };
   const doArchive = async () => {
@@ -396,9 +477,11 @@ export default function Timeline({
               // Floor only at the latest node (keeps chains in order). An empty
               // project has no floor, so you can backdate when recreating history.
               const minDate = last ? isoFromMs(last.t) : "";
+              const anchorNodeId = last ? last.id : null;
+              const anchorT = last ? last.t : nowMs;
 
               return (
-                <div key={p.id} className="flex" style={{ opacity: p.inactive ? 0.55 : 1 }}>
+                <div key={p.id} className="relative flex" style={{ opacity: p.inactive ? 0.55 : 1 }}>
                   <div
                     onClick={() =>
                       armed
@@ -446,6 +529,11 @@ export default function Timeline({
                           <rect width={NODE} height={NODE} rx={10} ry={10} />
                         </clipPath>
                       ))}
+                      {p.ambitions.map((a) => (
+                        <clipPath key={`ac-${a.id}`} id={`aclip-${a.id}`}>
+                          <circle cx={xFor(a.t)} cy={centerY} r={AMB_R} />
+                        </clipPath>
+                      ))}
                     </defs>
 
                     {months.map((m, i) => (
@@ -480,6 +568,23 @@ export default function Timeline({
                       />
                     ))}
 
+                    {/* dotted connectors to notes */}
+                    {p.notes.map((nt) => {
+                      const np = noteOf(nt);
+                      return (
+                        <line
+                          key={`nl-${nt.id}`}
+                          x1={xFor(nt.anchorT)}
+                          y1={centerY}
+                          x2={xFor(np.x)}
+                          y2={centerY + np.y}
+                          stroke="#d97706"
+                          strokeWidth={1.5}
+                          strokeDasharray="2 3"
+                        />
+                      );
+                    })}
+
                     {/* square nodes */}
                     {p.nodes.map((n) => {
                       const cx = xFor(n.t);
@@ -495,11 +600,20 @@ export default function Timeline({
                           key={n.id}
                           className="cursor-pointer"
                           opacity={dim ? 0.4 : 1}
-                          onClick={() =>
-                            armed
-                              ? applyNodeTag(n.id, armed.id, nodeTagsOf(n))
-                              : setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n) })
-                          }
+                          onClick={() => {
+                            if (armed) {
+                              applyNodeTag(n.id, armed.id, nodeTagsOf(n));
+                            } else {
+                              setNodeCalOpen(false);
+                              setNodeMenu({
+                                id: n.id,
+                                label: n.label,
+                                tags: nodeTagsOf(n),
+                                deadline: n.deadline,
+                                done: n.done,
+                              });
+                            }
+                          }}
                         >
                           <g transform={`translate(${left}, ${top})`}>
                             <rect
@@ -560,6 +674,16 @@ export default function Timeline({
                             strokeWidth={1.5}
                             strokeDasharray="4 3"
                           />
+                          {a.isDeadline && !a.done && a.stage > 0 && (
+                            <rect
+                              x={cx - AMB_R}
+                              y={centerY - AMB_R}
+                              width={(2 * AMB_R * a.stage) / 100}
+                              height={2 * AMB_R}
+                              fill="#ef4444"
+                              clipPath={`url(#aclip-${a.id})`}
+                            />
+                          )}
                           {a.done && (
                             <text x={cx} y={centerY + 5} fill="#e4e4e7" fontSize={16} textAnchor="middle">
                               ✓
@@ -577,14 +701,100 @@ export default function Timeline({
                     })}
 
                     {/* "+" to add a node/ambition */}
-                    <g className="cursor-pointer" onClick={() => openAdd(p.id, p.name, minDate)}>
+                    <g
+                      className="cursor-pointer"
+                      onClick={() => setAddChoice({ projectId: p.id, projectName: p.name, minDate, anchorNodeId, anchorT })}
+                    >
                       <circle cx={plusX} cy={plusY} r={10} fill="#18181b" stroke="#a1a1aa" strokeWidth={1.5} />
                       <text x={plusX} y={plusY + 4} fill="#e4e4e7" fontSize={14} textAnchor="middle">
                         +
                       </text>
-                      <title>Add a node or ambition to {p.name}</title>
+                      <title>Add a note or ambition to {p.name}</title>
                     </g>
                   </svg>
+
+                  {p.notes.map((nt) => {
+                    const np = noteOf(nt);
+                    const isEditing = editingNote === nt.id;
+                    return (
+                      <div
+                        key={nt.id}
+                        onPointerDown={(e) => {
+                          if (isEditing) return;
+                          e.currentTarget.setPointerCapture(e.pointerId);
+                          noteDragRef.current = { id: nt.id, moved: false, dist: 0 };
+                          setDraggingNote(nt.id);
+                        }}
+                        onPointerMove={(e) => {
+                          if (draggingNote !== nt.id || !noteDragRef.current) return;
+                          noteDragRef.current.dist += Math.abs(e.movementX) + Math.abs(e.movementY);
+                          if (noteDragRef.current.dist <= 4) return; // ignore tiny jitter
+                          noteDragRef.current.moved = true;
+                          setNoteOverride((prev) => {
+                            const cur = prev[nt.id] ?? { x: nt.x, y: nt.y };
+                            const nx = cur.x + (e.movementX / pxPerDay) * DAY;
+                            const limit = laneH / 2 - 22;
+                            const ny = Math.max(-limit, Math.min(limit, cur.y + e.movementY));
+                            const next = { ...prev, [nt.id]: { x: nx, y: ny } };
+                            noteOverrideRef.current = next;
+                            return next;
+                          });
+                        }}
+                        onPointerUp={(e) => {
+                          if (draggingNote !== nt.id) return;
+                          e.currentTarget.releasePointerCapture(e.pointerId);
+                          setDraggingNote(null);
+                          const info = noteDragRef.current;
+                          noteDragRef.current = null;
+                          if (info && info.moved) {
+                            const cur = noteOverrideRef.current[nt.id] ?? { x: nt.x, y: nt.y };
+                            updateNotePosition(nt.id, cur.x, cur.y);
+                          } else {
+                            // a click (no real drag) opens the note for reading/editing
+                            setEditBody(nt.body);
+                            setEditingNote(nt.id);
+                          }
+                        }}
+                        style={{
+                          position: "absolute",
+                          left: LABEL_W + xFor(np.x),
+                          top: centerY + np.y,
+                          transform: "translate(-50%, -50%)",
+                          touchAction: "none",
+                          zIndex: isEditing ? 20 : 10,
+                        }}
+                        className={`cursor-grab select-none rounded-md border border-amber-500/70 bg-amber-100 text-amber-950 shadow ${
+                          isEditing ? "p-2" : "px-2 py-1"
+                        }`}
+                        title={isEditing ? "" : "Click to open · drag to move"}
+                      >
+                        {isEditing ? (
+                          <div className="flex flex-col gap-1">
+                            <textarea
+                              autoFocus
+                              value={editBody}
+                              onChange={(e) => setEditBody(e.target.value)}
+                              onBlur={() => saveNoteBody(nt.id)}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="w-60 resize-none rounded bg-white p-2 text-sm text-amber-950 outline-none"
+                              rows={6}
+                            />
+                            <button
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={() => removeNoteById(nt.id)}
+                              className="self-end text-xs text-amber-700 hover:text-red-600"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="line-clamp-3 block max-w-[150px] whitespace-pre-wrap break-words text-xs">
+                            {nt.body || "(empty note)"}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
@@ -646,13 +856,19 @@ export default function Timeline({
             <label className="mb-1 block text-sm text-zinc-300">Date</label>
             <MiniCalendar value={addDate} onChange={setAddDate} minDate={addTo.minDate} />
             <p className="mb-1 mt-1 text-xs text-zinc-500">Selected: {fmtEU(addDate)}</p>
-            <p className="mb-5 text-xs">
+            <p className="mb-2 text-xs">
               {addDate > todayIso() ? (
                 <span className="text-blue-400">Future → Ambition (round)</span>
               ) : (
                 <span className="text-zinc-500">Today/past → node (square)</span>
               )}
             </p>
+            {addDate > todayIso() && (
+              <label className="mb-5 flex items-center gap-2 text-sm text-zinc-300">
+                <input type="checkbox" checked={addAsDeadline} onChange={(e) => setAddAsDeadline(e.target.checked)} />
+                Also set as a deadline (red countdown to the date)
+              </label>
+            )}
 
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setAddTo(null)} disabled={busy} className={ghost}>
@@ -666,12 +882,122 @@ export default function Timeline({
         </div>
       )}
 
+      {/* Choose what to add: note or ambition */}
+      {addChoice && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => setAddChoice(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
+            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Add to {addChoice.projectName}</h2>
+            <p className="mb-4 text-sm text-zinc-400">What would you like to add?</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setNoteCompose({
+                    projectId: addChoice.projectId,
+                    anchorNodeId: addChoice.anchorNodeId,
+                    anchorT: addChoice.anchorT,
+                  });
+                  setNoteBody("");
+                  setAddChoice(null);
+                }}
+                className="flex-1 rounded-md border border-amber-500/70 bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 hover:bg-amber-200"
+              >
+                📝 Note
+              </button>
+              <button
+                onClick={() => {
+                  const c = addChoice;
+                  setAddChoice(null);
+                  openAdd(c.projectId, c.projectName, c.minDate);
+                }}
+                className="flex-1 rounded-md border border-blue-400 bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-500"
+              >
+                ◯ Ambition
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compose a note */}
+      {noteCompose && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNoteCompose(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
+            <h2 className="mb-3 text-lg font-semibold text-zinc-100">New note</h2>
+            <textarea
+              autoFocus
+              value={noteBody}
+              onChange={(e) => setNoteBody(e.target.value)}
+              placeholder="Write a note…"
+              rows={4}
+              className="mb-3 w-full resize-none rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            />
+            <p className="mb-4 text-xs text-zinc-500">
+              It&apos;ll appear by the latest node, linked by a dotted line — then drag it anywhere.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setNoteCompose(null)} disabled={busy} className={ghost}>
+                Cancel
+              </button>
+              <button onClick={submitNote} disabled={busy} className={primary}>
+                {busy ? "Adding…" : "Add note"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Node actions */}
       {nodeMenu && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNodeMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
             <h2 className="mb-1 text-lg font-semibold text-zinc-100">Node</h2>
             <p className="mb-4 text-sm text-zinc-400">{nodeMenu.label}</p>
+
+            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Deadline</p>
+            <div className="mb-4">
+              {nodeMenu.deadline ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-zinc-300">
+                    {nodeMenu.done ? "Completed ✓" : `Due ${fmtEU(nodeMenu.deadline)}`}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => completeNode(!nodeMenu.done)}
+                      disabled={busy}
+                      className={nodeMenu.done ? ghost : primary}
+                    >
+                      {nodeMenu.done ? "Reopen" : "✓ Complete"}
+                    </button>
+                    <button onClick={removeNodeDeadline} disabled={busy} className={ghost}>
+                      Clear deadline
+                    </button>
+                  </div>
+                </div>
+              ) : nodeCalOpen ? (
+                <div>
+                  <MiniCalendar value={nodeCalDate} onChange={setNodeCalDate} />
+                  <p className="mt-1 text-xs text-zinc-500">Due {fmtEU(nodeCalDate)}</p>
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={() => setNodeCalOpen(false)} disabled={busy} className={ghost}>
+                      Cancel
+                    </button>
+                    <button onClick={saveNodeDeadline} disabled={busy} className={primary}>
+                      Set deadline
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setNodeCalDate(todayIso());
+                    setNodeCalOpen(true);
+                  }}
+                  className={ghost}
+                >
+                  Set deadline
+                </button>
+              )}
+            </div>
 
             <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
             <div className="mb-5">
