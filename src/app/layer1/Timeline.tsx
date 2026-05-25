@@ -80,17 +80,52 @@ const WAND_SVG =
   "</svg>";
 const WAND_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(WAND_SVG)}") 21 6, crosshair`;
 
+// Arrange tag dots like dice pips so several tags pack neatly inside a node.
+const DICE: Record<number, [number, number][]> = {
+  1: [[1, 1]],
+  2: [[0, 0], [2, 2]],
+  3: [[0, 0], [1, 1], [2, 2]],
+  4: [[0, 0], [2, 0], [0, 2], [2, 2]],
+  5: [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]],
+  6: [[0, 0], [2, 0], [0, 1], [2, 1], [0, 2], [2, 2]],
+  7: [[0, 0], [2, 0], [0, 1], [1, 1], [2, 1], [0, 2], [2, 2]],
+  8: [[0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]],
+  9: [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1], [0, 2], [1, 2], [2, 2]],
+};
+function pipPositions(n: number): { x: number; y: number; r: number }[] {
+  if (n >= 1 && n <= 9) {
+    return DICE[n].map(([c, r]) => ({ x: 12 + c * 12, y: 12 + r * 12, r: 5 }));
+  }
+  // Many tags: a centred grid (up to 4 per row) with smaller dots.
+  const cols = 4;
+  const rows = Math.ceil(n / cols);
+  const stepX = 11;
+  const stepY = 11;
+  const startX = (NODE - (cols - 1) * stepX) / 2;
+  const startY = (NODE - (rows - 1) * stepY) / 2;
+  const out: { x: number; y: number; r: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ x: startX + (i % cols) * stepX, y: startY + Math.floor(i / cols) * stepY, r: 3.2 });
+  }
+  return out;
+}
+
 export default function Timeline({
   lanes,
   nowMs,
   tagColors,
   categories,
+  selectedTags,
+  deadlineActive,
 }: {
   lanes: Lane[];
   nowMs: number;
   tagColors: Record<string, string>;
   categories: TagCat[];
+  selectedTags: string[];
+  deadlineActive: boolean;
 }) {
+  const filterActive = selectedTags.length > 0 || deadlineActive;
   const router = useRouter();
   const { armed, setArmed } = useWand();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -451,11 +486,15 @@ export default function Timeline({
                       const left = cx - NODE / 2;
                       const top = centerY - NODE / 2;
                       const ntags = nodeTagsOf(n);
+                      const matchesFilter =
+                        (!selectedTags.length || ntags.some((t) => selectedTags.includes(t))) &&
+                        (!deadlineActive || !!n.deadline);
+                      const dim = n.done || (filterActive && !matchesFilter);
                       return (
                         <g
                           key={n.id}
                           className="cursor-pointer"
-                          opacity={n.done ? 0.4 : 1}
+                          opacity={dim ? 0.4 : 1}
                           onClick={() =>
                             armed
                               ? applyNodeTag(n.id, armed.id, nodeTagsOf(n))
@@ -478,21 +517,21 @@ export default function Timeline({
                                 clipPath={`url(#clip-${n.id})`}
                               />
                             )}
-                            {ntags.map((tid, di) => {
-                              const startX = (NODE - ntags.length * 13) / 2 + 6.5;
-                              return (
+                            {(() => {
+                              const pos = pipPositions(ntags.length);
+                              return ntags.map((tid, di) => (
                                 <circle
                                   key={tid}
                                   className="tag-pop"
-                                  cx={startX + di * 13}
-                                  cy={NODE - 11}
-                                  r={6}
+                                  cx={pos[di].x}
+                                  cy={pos[di].y}
+                                  r={pos[di].r}
                                   fill={tagColors[tid] ?? "#a1a1aa"}
                                   stroke="#00000066"
                                   strokeWidth={0.75}
                                 />
-                              );
-                            })}
+                              ));
+                            })()}
                             <title>
                               {n.label}
                               {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}

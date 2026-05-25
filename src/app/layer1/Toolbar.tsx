@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useWand } from "./wand";
 
-const COUNTS_KEY = "sirma:arrangeCounts";
-const DEFAULT_SORT = "last_updated"; // always pinned first; usage reorders the rest
+const ARRANGE_COUNTS_KEY = "sirma:arrangeCounts";
+const FILTER_COUNTS_KEY = "sirma:filterCounts";
+const DEFAULT_SORT = "last_updated";
 
 const SORTS: { value: string; label: string }[] = [
   { value: "last_updated", label: "Last updated" },
@@ -22,15 +23,13 @@ type TagCat = {
   values: { id: string; value: string; color: string }[];
 };
 
-// Simple wand: a stick with a star at the tip. Uses currentColor.
+type FilterOpt = { id: string; label: string; color?: string; isActive: boolean; toggle: () => void };
+
 function WandIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
       <line x1="3" y1="21" x2="14" y2="10" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-      <path
-        d="M18 2 l1.4 3.9 l3.9 1.4 l-3.9 1.4 l-1.4 3.9 l-1.4-3.9 l-3.9-1.4 l3.9-1.4 z"
-        fill="currentColor"
-      />
+      <path d="M18 2 l1.4 3.9 l3.9 1.4 l-3.9 1.4 l-1.4 3.9 l-1.4-3.9 l-3.9-1.4 l3.9-1.4 z" fill="currentColor" />
     </svg>
   );
 }
@@ -40,7 +39,7 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   const pathname = usePathname();
   const sp = useSearchParams();
   const { armed, setArmed } = useWand();
-  const [tagsOpen, setTagsOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [wandOpen, setWandOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
 
@@ -53,20 +52,31 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
     router.push(`${pathname}?${params.toString()}`);
   };
 
-  // Track how often each Arrange option is chosen (stored in this browser),
-  // then reorder the menu most-used-first — but keep the default pinned at top.
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  // --- Arrange usage counts (reorders the sort menu) ---
+  const [arrangeCounts, setArrangeCounts] = useState<Record<string, number>>({});
+  const [filterCounts, setFilterCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(COUNTS_KEY);
-      if (raw) setCounts(JSON.parse(raw));
+      const a = localStorage.getItem(ARRANGE_COUNTS_KEY);
+      if (a) setArrangeCounts(JSON.parse(a));
+      const f = localStorage.getItem(FILTER_COUNTS_KEY);
+      if (f) setFilterCounts(JSON.parse(f));
     } catch {}
   }, []);
-  const bump = (value: string) => {
-    setCounts((prev) => {
+  const bumpArrange = (value: string) => {
+    setArrangeCounts((prev) => {
       const next = { ...prev, [value]: (prev[value] ?? 0) + 1 };
       try {
-        localStorage.setItem(COUNTS_KEY, JSON.stringify(next));
+        localStorage.setItem(ARRANGE_COUNTS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+  const bumpFilter = (id: string) => {
+    setFilterCounts((prev) => {
+      const next = { ...prev, [id]: (prev[id] ?? 0) + 1 };
+      try {
+        localStorage.setItem(FILTER_COUNTS_KEY, JSON.stringify(next));
       } catch {}
       return next;
     });
@@ -74,7 +84,7 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   const orderedSorts = [
     ...SORTS.filter((s) => s.value === DEFAULT_SORT),
     ...SORTS.filter((s) => s.value !== DEFAULT_SORT).sort(
-      (a, b) => (counts[b.value] ?? 0) - (counts[a.value] ?? 0)
+      (a, b) => (arrangeCounts[b.value] ?? 0) - (arrangeCounts[a.value] ?? 0)
     ),
   ];
 
@@ -87,35 +97,114 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   const selectedTags = (sp.get("tags") ?? "").split(",").filter(Boolean);
   const showHidden = sp.get("show_hidden") === "1";
   const hasHide = categories.some((c) => c.isHide);
-  const toggleTag = (id: string) => {
+
+  const toggleTagParam = (id: string) => {
     const set = new Set(selectedTags);
     if (set.has(id)) set.delete(id);
     else set.add(id);
     update({ tags: [...set].join(",") || null });
   };
 
+  // A click that counts usage only when turning a filter ON.
+  const makeToggle = (id: string, isActive: boolean, doToggle: () => void) => () => {
+    if (!isActive) bumpFilter(id);
+    doToggle();
+  };
+
+  // All filter options (status flags + every tag value) in one model.
+  const flagOpts: FilterOpt[] = [
+    {
+      id: "flag:deadline_all",
+      label: "Has a deadline",
+      isActive: deadline === "all",
+      toggle: makeToggle("flag:deadline_all", deadline === "all", () =>
+        update({ deadline: deadline === "all" ? null : "all" })
+      ),
+    },
+    {
+      id: "flag:hide_completed",
+      label: "Hide completed",
+      isActive: hideCompleted,
+      toggle: makeToggle("flag:hide_completed", hideCompleted, () =>
+        update({ hide_completed: hideCompleted ? null : "1" })
+      ),
+    },
+    {
+      id: "flag:show_archived",
+      label: "Show archived",
+      isActive: showArchived,
+      toggle: makeToggle("flag:show_archived", showArchived, () =>
+        update({ show_archived: showArchived ? null : "1" })
+      ),
+    },
+    {
+      id: "flag:inactive_only",
+      label: "Inactive only",
+      isActive: inactiveOnly,
+      toggle: makeToggle("flag:inactive_only", inactiveOnly, () =>
+        update({ inactive_only: inactiveOnly ? null : "1" })
+      ),
+    },
+  ];
+  const tagOpts: FilterOpt[] = categories.flatMap((c) =>
+    c.values.map((v) => {
+      const isActive = selectedTags.includes(v.id);
+      return {
+        id: `tag:${v.id}`,
+        label: v.value,
+        color: v.color,
+        isActive,
+        toggle: makeToggle(`tag:${v.id}`, isActive, () => toggleTagParam(v.id)),
+      };
+    })
+  );
+  const allOpts = [...flagOpts, ...tagOpts];
+  const optById = (id: string) => allOpts.find((o) => o.id === id);
+
+  const activeOpts = allOpts.filter((o) => o.isActive);
+  const quickOpts = allOpts
+    .filter((o) => (filterCounts[o.id] ?? 0) > 0)
+    .sort((a, b) => (filterCounts[b.id] ?? 0) - (filterCounts[a.id] ?? 0))
+    .slice(0, 3);
+
   const selectCls = "rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200";
-  const checkLabel = "flex items-center gap-1.5 text-sm text-zinc-300";
   const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4";
-  const card = "max-h-[80vh] w-full max-w-sm overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+  const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+
+  const chip = (o: FilterOpt, removable: boolean) => (
+    <button
+      key={o.id}
+      onClick={o.toggle}
+      title={removable ? "Remove filter" : o.isActive ? "Active — click to remove" : "Apply filter"}
+      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+      style={{
+        background: o.isActive ? o.color ?? "#3f3f46" : "transparent",
+        color: o.isActive ? "#fff" : "#d4d4d8",
+        border: `1px solid ${o.color ?? "#52525b"}`,
+      }}
+    >
+      {o.label}
+      {removable && <span className="opacity-80">✕</span>}
+    </button>
+  );
 
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-zinc-800 px-6 py-2.5">
-      {/* Arrangement */}
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-zinc-800 px-6 py-2.5">
+      {/* Arrange */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Arrange</span>
         <select
           className={selectCls}
           value={sort}
           onChange={(e) => {
-            bump(e.target.value);
+            bumpArrange(e.target.value);
             update({ sort: e.target.value });
           }}
         >
           {orderedSorts.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
-              {counts[s.value] ? ` (${counts[s.value]})` : ""}
+              {arrangeCounts[s.value] ? ` (${arrangeCounts[s.value]})` : ""}
             </option>
           ))}
         </select>
@@ -128,31 +217,24 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
         </button>
       </div>
 
-      {/* Filters (tag filter lives here) */}
-      <div className="flex flex-wrap items-center gap-4">
+      {/* Filters: button + quick-select + active chips */}
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Filter</span>
-        <label className={checkLabel}>
-          Deadline
-          <select className={selectCls} value={deadline} onChange={(e) => update({ deadline: e.target.value })}>
-            <option value="">Any</option>
-            <option value="all">Has a deadline</option>
-          </select>
-        </label>
-        <label className={checkLabel}>
-          <input type="checkbox" checked={hideCompleted} onChange={(e) => update({ hide_completed: e.target.checked ? "1" : null })} />
-          Hide completed
-        </label>
-        <label className={checkLabel}>
-          <input type="checkbox" checked={showArchived} onChange={(e) => update({ show_archived: e.target.checked ? "1" : null })} />
-          Show archived
-        </label>
-        <label className={checkLabel}>
-          <input type="checkbox" checked={inactiveOnly} onChange={(e) => update({ inactive_only: e.target.checked ? "1" : null })} />
-          Inactive only
-        </label>
-        <button onClick={() => setTagsOpen(true)} className={selectCls}>
-          Tags {selectedTags.length ? `(${selectedTags.length})` : ""} ▾
+        <button onClick={() => setFiltersOpen(true)} className={selectCls}>
+          Filters{activeOpts.length ? ` (${activeOpts.length})` : ""} ▾
         </button>
+
+        {/* quick-select: your most-used filters */}
+        {quickOpts.length > 0 && (
+          <>
+            <span className="text-[10px] uppercase tracking-wide text-zinc-600">Quick</span>
+            {quickOpts.map((o) => chip(o, false))}
+          </>
+        )}
+
+        {/* active filters as removable chips */}
+        {activeOpts.length > 0 && <span className="text-zinc-700">|</span>}
+        {activeOpts.map((o) => chip(o, true))}
       </div>
 
       {/* Tags: manage + magic wand */}
@@ -165,9 +247,7 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
           onClick={() => (armed ? setArmed(null) : setWandOpen(true))}
           title={armed ? "Put the wand down (Esc)" : "Magic wand — stamp a tag onto things"}
           className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm ${
-            armed
-              ? "border-blue-400 bg-blue-600 text-white"
-              : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+            armed ? "border-blue-400 bg-blue-600 text-white" : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
           }`}
         >
           <WandIcon />
@@ -175,31 +255,29 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
         </button>
       </div>
 
-      {/* Tag filter pop-up */}
-      {tagsOpen && (
-        <div className={overlay} onClick={() => setTagsOpen(false)}>
+      {/* Filters panel */}
+      {filtersOpen && (
+        <div className={overlay} onClick={() => setFiltersOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Filter by tags</h2>
+            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Filters</h2>
+
+            <div className="mb-4">
+              <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Status &amp; deadline</div>
+              <div className="flex flex-wrap gap-1">{flagOpts.map((o) => chip(o, false))}</div>
+            </div>
+
+            <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Tags</div>
             {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
             {categories.map((c) => (
               <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">
                   {c.name}
                   {c.isHide ? " · hidden by default" : ""}
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {c.values.map((v) => {
-                    const on = selectedTags.includes(v.id);
-                    return (
-                      <button
-                        key={v.id}
-                        onClick={() => toggleTag(v.id)}
-                        className="rounded-full px-2 py-0.5 text-xs"
-                        style={{ background: on ? v.color : "transparent", color: on ? "#fff" : "#d4d4d8", border: `1px solid ${v.color}` }}
-                      >
-                        {v.value}
-                      </button>
-                    );
+                    const o = optById(`tag:${v.id}`);
+                    return o ? chip(o, false) : null;
                   })}
                 </div>
               </div>
@@ -210,15 +288,21 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
                 Show spam / low-priority
               </label>
             )}
+
             <div className="mt-4 flex justify-between">
-              {selectedTags.length > 0 ? (
-                <button onClick={() => update({ tags: null })} className="text-sm text-zinc-400 hover:text-zinc-200">
-                  Clear
+              {activeOpts.length > 0 ? (
+                <button
+                  onClick={() =>
+                    update({ tags: null, hide_completed: null, show_archived: null, inactive_only: null, deadline: null, show_hidden: null })
+                  }
+                  className="text-sm text-zinc-400 hover:text-zinc-200"
+                >
+                  Clear all
                 </button>
               ) : (
                 <span />
               )}
-              <button onClick={() => setTagsOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
+              <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
                 Done
               </button>
             </div>

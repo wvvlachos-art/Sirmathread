@@ -269,7 +269,14 @@ export default async function Layer1Page({
         {lanes.length === 0 ? (
           <div className="p-10 text-zinc-400">No projects match the current filters.</div>
         ) : (
-          <Timeline lanes={lanes} nowMs={nowMs} tagColors={tagColors} categories={tagCatalog} />
+          <Timeline
+            lanes={lanes}
+            nowMs={nowMs}
+            tagColors={tagColors}
+            categories={tagCatalog}
+            selectedTags={selectedTags}
+            deadlineActive={deadlineMode === "all"}
+          />
         )}
       </WandProvider>
     </main>
