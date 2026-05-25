@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 const SORTS: { value: string; label: string }[] = [
   { value: "last_updated", label: "Last updated" },
   { value: "date_created", label: "Date created" },
+  { value: "ambitiousness", label: "Ambitiousness" },
   { value: "deadline", label: "Deadline" },
   { value: "inactive", label: "Most inactive" },
 ];

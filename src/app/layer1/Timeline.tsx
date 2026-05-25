@@ -27,6 +27,7 @@ type Lane = {
   name: string;
   origin: string;
   archived: boolean;
+  inactive: boolean;
   nodes: LaneNode[];
   ambitions: Ambition[];
 };
@@ -276,7 +277,7 @@ export default function Timeline({ lanes, nowMs }: { lanes: Lane[]; nowMs: numbe
               const minDate = last ? isoFromMs(last.t) : "";
 
               return (
-                <div key={p.id} className="flex">
+                <div key={p.id} className="flex" style={{ opacity: p.inactive ? 0.55 : 1 }}>
                   <div
                     onClick={() =>
                       setProjMenu({

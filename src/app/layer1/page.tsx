@@ -125,8 +125,27 @@ export default async function Layer1Page({
         return new Date(p.updated_at).getTime();
     }
   };
-  projects.sort((a, b) => sortVal(a) - sortVal(b));
-  if (dir === "desc") projects.reverse();
+  // Last updated (newest first) is the general tiebreaker for every sort.
+  const updatedDesc = (a: DbProject, b: DbProject) =>
+    new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+
+  if (sort === "ambitiousness") {
+    // Most ambitions first; ties (incl. all the zero-ambition projects) fall
+    // back to last updated — a "stealth" secondary sort.
+    projects.sort((a, b) => {
+      const d = (b.ambitions?.length ?? 0) - (a.ambitions?.length ?? 0);
+      return d !== 0 ? d : updatedDesc(a, b);
+    });
+    if (dir === "asc") projects.reverse();
+  } else {
+    projects.sort((a, b) => {
+      const pa = sortVal(a);
+      const pb = sortVal(b);
+      let primary = pa === pb ? 0 : pa < pb ? -1 : 1;
+      if (dir === "desc") primary = -primary;
+      return primary !== 0 ? primary : updatedDesc(a, b);
+    });
+  }
 
   // ---- Shape the data for the timeline ----
   const lanes = projects.map((p) => ({
@@ -134,6 +153,10 @@ export default async function Layer1Page({
     name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
     origin: p.origin === "manual" ? "manual" : "gmail",
     archived: p.state === "archived",
+    inactive: !!(
+      p.last_activity_at &&
+      nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
+    ),
     nodes: (p.nodes ?? [])
       .filter((n) => n.state === "promoted" && (n.emails?.date_sent || n.node_date))
       .map((n) => {

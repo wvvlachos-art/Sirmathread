@@ -115,7 +115,8 @@ Read-only product. Your inbox is safe.
 **Layer 1 overview screen built & expanded (session 2) — first real screen!** Visit http://localhost:3000 → "Open your projects →" (or /layer1). Projects shown as horizontal lanes on a shared **calendar timeline that spans 2 years back → 2 years forward** (scroll both ways; it auto-jumps to recent activity on load). The month axis stays frozen at the top and project names freeze on the left as you scroll. Nodes are placed by date, joined by wires; deadline nodes fill red in stages; "done" nodes go muted gray. Lanes are tall enough for labels/annotations.
 
 **Toolbar** at the top now has:
-- **Arrange** — sort lanes by Last updated / Date created / Deadline / Most inactive, with an ascending/descending toggle.
+- **Arrange** — sort lanes by Last updated / Date created / **Ambitiousness** (most ambitions first) / Deadline / Most inactive, with an ascending/descending toggle. **Last updated is the tiebreaker** for every sort (so within equal values, the most recently touched float up). Inactive projects naturally drift to the bottom under Last updated / Date created.
+- **Inactive projects are dimmed** (~55% opacity, colour kept) once they've had no activity for 45 days — a gentle "this has gone quiet" signal. They are not hidden or greyed out.
 - **Filter** — Has-a-deadline, Hide completed, Show archived, Inactive only.
 - **Tags** — placeholder for now ("coming soon"); we'll build tag filtering in a later pass but the data model already supports it.
 - Note: filter/sort choices live in the page address for now (not yet saved permanently between sessions).
