@@ -122,7 +122,11 @@ Read-only product. Your inbox is safe.
 
 Currently filled with **20 dummy projects** (activity spread across the last ~6 months) so we can see how it behaves at scale. All dummy projects are marked "SAMPLE/" and can be wiped anytime. Re-seed with `node --env-file=.env.local supabase/seed-sample.mjs`.
 
-Next: clicking a lane should open Layer 2 (single-project detail with draggable context/insight/note bubbles). Build tag filtering. Connect Gmail so real labeled threads replace the dummy data.
+**Timeline refined (session 2):** opens at **~1 month across** and has **zoom buttons (1w / 1m / 3m / 6m)** bottom-right. It loads the calendar **in chunks** — starts ~4 months back to ~2 months forward, with **"‹ Earlier" / "Later ›"** buttons that each add 2 more months (configurable later), plus a **"Today"** button to recenter. Much snappier than the old full-4-year canvas.
+
+**Ambitions added (session 2) — the forward-looking feature!** Each project's latest node has a small **"+"** at its top-right. Click it → a box with a **mini-calendar** (European DD/MM/YYYY, week starts Monday) → set a **title + future target date** → it appears as a **round** marker out in the future, linked back by a **dashed wire** (round + dashed = "planned", vs solid squares = real past emails). **Click a round marker to tick it done** (muted + ✓); click again to reopen. Stored in a new `ambitions` table (`supabase/ambitions.sql`).
+
+Next: clicking a lane should open Layer 2 (single-project detail with draggable context/insight/note bubbles). Make Ambitions/Earlier-Later configurable. Build tag filtering. Connect Gmail so real labeled threads replace the dummy data.
 
 ## What I need from you next
 
