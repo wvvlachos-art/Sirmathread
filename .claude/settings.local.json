@@ -7,7 +7,13 @@
       "Bash(git init *)",
       "Bash(git config *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git check-ignore *)",
+      "PowerShell(npm install *)",
+      "PowerShell(node --env-file=.env.local test-connection.mjs)",
+      "PowerShell($env:NODE_OPTIONS=\"--use-system-ca\"; node --env-file=.env.local test-connection.mjs)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Get-NetTCPConnection *)"
     ]
   }
 }

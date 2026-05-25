@@ -94,7 +94,18 @@ Read-only product. Your inbox is safe.
 
 ## Status right now
 
-We've sketched the design and confirmed how the two layers work. No actual application built yet. Next: pick the technical setup and start building.
+**Updated 2026-05-25 (session 2):** The app now exists and runs! We:
+- Confirmed your computer has the needed tools (Node.js, npm, Git).
+- Built the blank Next.js + TypeScript + Tailwind project skeleton in this folder.
+- Replaced the generic starter page with your branded **"Sirmathread"** welcome page.
+- Ran it locally — visible at http://localhost:3000 while the dev server is on.
+- Saved the first Git snapshot (a permanent, restorable backup of everything so far).
+
+**To see it again later:** ask Claude to "start the server," then open http://localhost:3000 in a browser. Ask Claude to "stop the server" when done.
+
+**Also done in session 2:** Supabase (the database) is created and connected — we ran a test that confirmed the app can reach it. Your keys live in a private file (`.env.local`) that Git never uploads.
+
+Next: create the actual database tables (projects, nodes, bubbles, notes, tags, etc.) so the app has somewhere to store your data.
 
 ## What I need from you next
 
@@ -113,7 +124,7 @@ After that, we build features in this order: Gmail OAuth → email sync → Clau
 ## Logins / accounts (to be added as we go)
 
 - Netlify: _account exists, will use this for hosting_
-- Supabase: _not set up yet_
+- Supabase: ✅ _project created (sirmathread); database connected and tested. Keys stored privately in `.env.local` (never uploaded). Database password saved by William._
 - Domain (Porkbun): ✅ _sirmathread.com — purchased_
 - Google Cloud Console (for Gmail API): _not set up yet_
 - Anthropic API key: ✅ _created, stored securely by William — will live in Netlify env var when deployed_
