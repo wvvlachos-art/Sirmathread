@@ -167,6 +167,8 @@ export default function Timeline({
   const [legendOpen, setLegendOpen] = useState(false);
   const [upcomingOpen, setUpcomingOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
+  const [tagFindOpen, setTagFindOpen] = useState(false);
+  const [tagFindId, setTagFindId] = useState<string | null>(null);
   const [daysPerScreen, setDaysPerScreen] = useState(30);
   const [startMs, setStartMs] = useState(nowMs - INITIAL_BACK * DAY);
   const [endMs, setEndMs] = useState(nowMs + INITIAL_FWD * DAY);
@@ -1188,12 +1190,13 @@ export default function Timeline({
         </div>
       )}
 
-      {/* Upcoming + Recent toggles (lowered so they clear the calendar axis) */}
-      {!upcomingOpen && !recentOpen && (
+      {/* Upcoming / Recent / By-tag toggles (lowered so they clear the calendar axis) */}
+      {!upcomingOpen && !recentOpen && !tagFindOpen && (
         <div className="absolute right-4 top-14 z-30 flex flex-col items-end gap-2">
           <button
             onClick={() => {
               setRecentOpen(false);
+              setTagFindOpen(false);
               setUpcomingOpen(true);
             }}
             className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
@@ -1213,6 +1216,7 @@ export default function Timeline({
           <button
             onClick={() => {
               setUpcomingOpen(false);
+              setTagFindOpen(false);
               setRecentOpen(true);
             }}
             className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
@@ -1222,6 +1226,17 @@ export default function Timeline({
             {recent.length > 0 && (
               <span className="rounded-full bg-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-200">{recent.length}</span>
             )}
+          </button>
+          <button
+            onClick={() => {
+              setUpcomingOpen(false);
+              setRecentOpen(false);
+              setTagFindOpen(true);
+            }}
+            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+            title="Find everything carrying a tag"
+          >
+            By tag
           </button>
         </div>
       )}
@@ -1327,6 +1342,99 @@ export default function Timeline({
                   </span>
                 </button>
               ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* By tag: pick a tag, then see every node carrying it, newest first */}
+      {tagFindOpen && (
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
+            <span className="text-sm font-semibold text-zinc-100">By tag</span>
+            <button
+              onClick={() => {
+                setTagFindOpen(false);
+                setTagFindId(null);
+              }}
+              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {!tagFindId ? (
+              <>
+                <p className="px-1 pb-2 text-xs text-zinc-500">Pick a tag to see everything it&apos;s on.</p>
+                {categories.length === 0 && <p className="px-1 text-xs text-zinc-500">No tags yet.</p>}
+                {categories.map((c) => (
+                  <div key={c.id} className="mb-3">
+                    <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">{c.name}</div>
+                    <div className="flex flex-wrap gap-1 px-1">
+                      {c.values.map((v) => (
+                        <button
+                          key={v.id}
+                          onClick={() => setTagFindId(v.id)}
+                          className="rounded-full px-2 py-0.5 text-xs text-zinc-100"
+                          style={{ border: `1px solid ${v.color}`, background: `${v.color}33` }}
+                        >
+                          {v.value}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              (() => {
+                const tagVal = categories.flatMap((c) => c.values).find((v) => v.id === tagFindId);
+                const tagName = tagVal?.value ?? "tag";
+                const tagColor = tagVal?.color ?? tagColors[tagFindId] ?? "#a1a1aa";
+                const matches: { id: string; label: string; t: number; done: boolean; project: string; origin: string }[] = [];
+                for (const p of lanes)
+                  for (const n of p.nodes)
+                    if (nodeTagsOf(n).includes(tagFindId))
+                      matches.push({ id: n.id, label: n.label, t: n.t, done: n.done, project: p.name, origin: p.origin });
+                matches.sort((a, b) => b.t - a.t);
+                return (
+                  <>
+                    <div className="mb-2 flex items-center justify-between px-1">
+                      <span className="rounded-full px-2 py-0.5 text-xs text-white" style={{ background: tagColor }}>
+                        {tagName}
+                      </span>
+                      <button onClick={() => setTagFindId(null)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                        Change tag
+                      </button>
+                    </div>
+                    {matches.length === 0 ? (
+                      <p className="px-1 text-sm text-zinc-500">No nodes carry this tag.</p>
+                    ) : (
+                      matches.map((u) => (
+                        <button
+                          key={u.id}
+                          onClick={() => jumpToTime(u.t)}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                          title="Show on the timeline"
+                        >
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                          <span className="min-w-0 flex-1">
+                            <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
+                              {u.label}
+                            </span>
+                            <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                          </span>
+                          <span className="shrink-0 text-right">
+                            <span className="block text-[11px] text-zinc-400">{fmtEU(u.t)}</span>
+                            <span className="block text-[10px] text-zinc-600">{relLabel(u.t)}</span>
+                          </span>
+                        </button>
+                      ))
+                    )}
+                    <p className="mt-3 px-1 text-[10px] text-zinc-600">Showing tagged nodes. Ambitions can&apos;t be tagged yet.</p>
+                  </>
+                );
+              })()
             )}
           </div>
         </div>
