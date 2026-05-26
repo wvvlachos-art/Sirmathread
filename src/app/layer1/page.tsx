@@ -93,14 +93,14 @@ export default async function Layer1Page({
   const selectedTags = (sp.tags ?? "").split(",").filter(Boolean);
   const showHidden = sp.show_hidden === "1";
 
-  const states = showArchived ? ["active", "archived"] : ["active"];
-
+  // Always fetch every real project (active + archived) so we can tell how many
+  // are being held back by the current filters and report a "hidden" count.
   const { data, error } = await supabase
     .from("projects")
     .select(
       "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
     )
-    .in("state", states);
+    .in("state", ["active", "archived"]);
 
   if (error) {
     return (
@@ -113,7 +113,12 @@ export default async function Layer1Page({
     );
   }
 
-  let projects = (data ?? []) as DbProject[];
+  // The full set of the user's real projects — the baseline for the hidden count.
+  const universe = (data ?? []) as DbProject[];
+  let projects = universe;
+
+  // Archived projects are hidden unless "Show archived" is on.
+  if (!showArchived) projects = projects.filter((p) => p.state !== "archived");
 
   // ---- Tag catalog ----
   const { data: catData } = await supabase
@@ -286,7 +291,7 @@ export default async function Layer1Page({
       </header>
 
       <WandProvider>
-        <Toolbar categories={tagCatalog} />
+        <Toolbar categories={tagCatalog} hiddenCount={universe.length - lanes.length} />
 
         {lanes.length === 0 ? (
           <div className="p-10 text-zinc-400">No projects match the current filters.</div>

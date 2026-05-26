@@ -35,7 +35,7 @@ function WandIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-export default function Toolbar({ categories }: { categories: TagCat[] }) {
+export default function Toolbar({ categories, hiddenCount }: { categories: TagCat[]; hiddenCount: number }) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -52,6 +52,17 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
     }
     router.push(`${pathname}?${params.toString()}`);
   };
+
+  // Reset every filter and reveal all projects — archived and spam/low-priority included.
+  const showEverything = () =>
+    update({
+      tags: null,
+      hide_completed: null,
+      inactive_only: null,
+      deadline: null,
+      show_archived: "1",
+      show_hidden: "1",
+    });
 
   // --- Arrange usage counts (reorders the sort menu) ---
   const [arrangeCounts, setArrangeCounts] = useState<Record<string, number>>({});
@@ -236,6 +247,17 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
         {/* active filters as removable chips */}
         {activeOpts.length > 0 && <span className="text-zinc-700">|</span>}
         {activeOpts.map((o) => chip(o, true))}
+
+        {/* how many projects are currently held back, with a one-click escape hatch */}
+        {hiddenCount > 0 && (
+          <button
+            onClick={showEverything}
+            title="Some projects are hidden by the current filters (including archived and spam/low-priority). Click to show every project."
+            className="flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/25"
+          >
+            {hiddenCount} hidden <span className="font-medium underline">show all</span>
+          </button>
+        )}
       </div>
 
       {/* Tags: manage + magic wand */}
@@ -290,19 +312,14 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
               </label>
             )}
 
-            <div className="mt-4 flex justify-between">
-              {activeOpts.length > 0 ? (
-                <button
-                  onClick={() =>
-                    update({ tags: null, hide_completed: null, show_archived: null, inactive_only: null, deadline: null, show_hidden: null })
-                  }
-                  className="text-sm text-zinc-400 hover:text-zinc-200"
-                >
-                  Clear all
-                </button>
-              ) : (
-                <span />
-              )}
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+              <button
+                onClick={showEverything}
+                title="Reset every filter and reveal all projects — including archived and spam/low-priority"
+                className="rounded-md border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700"
+              >
+                Clear all filters
+              </button>
               <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
                 Done
               </button>
