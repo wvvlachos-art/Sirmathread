@@ -173,7 +173,9 @@ export default function Timeline({
   const [busy, setBusy] = useState(false);
 
   // Add (node or ambition) modal.
-  const [addTo, setAddTo] = useState<{ projectId: string; projectName: string; minDate: string } | null>(null);
+  const [addTo, setAddTo] = useState<
+    { projectId: string; projectName: string; minDate: string; mode: "node" | "ambition" } | null
+  >(null);
   const [addTitle, setAddTitle] = useState("");
   const [addDate, setAddDate] = useState(todayIso());
 
@@ -325,20 +327,21 @@ export default function Timeline({
     scrollRef.current?.scrollTo({ left: Math.max(0, todayX - vw * 0.65), behavior: "smooth" });
   };
 
-  const openAdd = (projectId: string, projectName: string, minDate: string) => {
+  const openAdd = (projectId: string, projectName: string, minDate: string, mode: "node" | "ambition") => {
     setAddTitle("");
-    setAddDate(minDate > todayIso() ? minDate : todayIso());
+    // Node defaults to today (a recent past event); ambition defaults to tomorrow.
+    setAddDate(mode === "ambition" ? isoFromMs(Date.now() + DAY) : todayIso());
     setAddAsDeadline(false);
-    setAddTo({ projectId, projectName, minDate });
+    setAddTo({ projectId, projectName, minDate, mode });
   };
   const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!addTo) return;
     setBusy(true);
-    const isFuture = addDate > todayIso();
-    const res = isFuture
-      ? await createAmbition(addTo.projectId, addTitle, addDate, addAsDeadline)
-      : await createManualNode(addTo.projectId, addTitle, addDate);
+    const res =
+      addTo.mode === "ambition"
+        ? await createAmbition(addTo.projectId, addTitle, addDate, addAsDeadline)
+        : await createManualNode(addTo.projectId, addTitle, addDate);
     setBusy(false);
     if (res.error) {
       alert("Could not add: " + res.error);
@@ -1245,12 +1248,18 @@ export default function Timeline({
         </div>
       </div>
 
-      {/* Add node/ambition modal */}
+      {/* Add node / ambition modal */}
       {addTo && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setAddTo(null)}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={submitAdd} className={card}>
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Add to {addTo.projectName}</h2>
-            <p className="mb-4 text-sm text-zinc-400">A future date becomes an Ambition; today/past becomes a node.</p>
+            <h2 className="mb-1 text-lg font-semibold text-zinc-100">
+              Add {addTo.mode === "ambition" ? "an ambition" : "a node"} to {addTo.projectName}
+            </h2>
+            <p className="mb-4 text-sm text-zinc-400">
+              {addTo.mode === "ambition"
+                ? "Something planned — pick a future date."
+                : "A past event — pick any date from the last node up to today."}
+            </p>
 
             <label className="mb-1 block text-sm text-zinc-300">Title</label>
             <input
@@ -1262,23 +1271,21 @@ export default function Timeline({
             />
 
             <label className="mb-1 block text-sm text-zinc-300">Date</label>
-            <MiniCalendar value={addDate} onChange={setAddDate} minDate={addTo.minDate} />
-            <p className="mb-1 mt-1 text-xs text-zinc-500">Selected: {fmtEU(addDate)}</p>
-            <p className="mb-2 text-xs">
-              {addDate > todayIso() ? (
-                <span className="text-blue-400">Future → Ambition (round)</span>
-              ) : (
-                <span className="text-zinc-500">Today/past → node (square)</span>
-              )}
-            </p>
-            {addDate > todayIso() && (
+            <MiniCalendar
+              value={addDate}
+              onChange={setAddDate}
+              minDate={addTo.mode === "ambition" ? isoFromMs(Date.now() + DAY) : addTo.minDate || undefined}
+              maxDate={addTo.mode === "node" ? todayIso() : undefined}
+            />
+            <p className="mb-2 mt-1 text-xs text-zinc-500">Selected: {fmtEU(addDate)}</p>
+            {addTo.mode === "ambition" && (
               <label className="mb-5 flex items-center gap-2 text-sm text-zinc-300">
                 <input type="checkbox" checked={addAsDeadline} onChange={(e) => setAddAsDeadline(e.target.checked)} />
                 Also set as a deadline (red countdown to the date)
               </label>
             )}
 
-            <div className="flex justify-end gap-2">
+            <div className="mt-2 flex justify-end gap-2">
               <button type="button" onClick={() => setAddTo(null)} disabled={busy} className={ghost}>
                 Cancel
               </button>
@@ -1296,7 +1303,29 @@ export default function Timeline({
           <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
             <h2 className="mb-1 text-lg font-semibold text-zinc-100">Add to {addChoice.projectName}</h2>
             <p className="mb-4 text-sm text-zinc-400">What would you like to add?</p>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2">
+              {(addChoice.minDate === "" || addChoice.minDate < todayIso()) && (
+                <button
+                  onClick={() => {
+                    const c = addChoice;
+                    setAddChoice(null);
+                    openAdd(c.projectId, c.projectName, c.minDate, "node");
+                  }}
+                  className="rounded-md border border-zinc-500 bg-zinc-800 px-4 py-3 text-left text-sm font-medium text-zinc-100 hover:bg-zinc-700"
+                >
+                  ▢ Node <span className="font-normal text-zinc-400">— a past event (up to today)</span>
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  const c = addChoice;
+                  setAddChoice(null);
+                  openAdd(c.projectId, c.projectName, c.minDate, "ambition");
+                }}
+                className="rounded-md border border-blue-400 bg-blue-600 px-4 py-3 text-left text-sm font-medium text-white hover:bg-blue-500"
+              >
+                ◯ Ambition <span className="font-normal text-blue-100">— something planned (future)</span>
+              </button>
               <button
                 onClick={() => {
                   setNoteCompose({
@@ -1307,19 +1336,9 @@ export default function Timeline({
                   setNoteBody("");
                   setAddChoice(null);
                 }}
-                className="flex-1 rounded-md border border-amber-500/70 bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 hover:bg-amber-200"
+                className="rounded-md border border-amber-500/70 bg-amber-100 px-4 py-3 text-left text-sm font-medium text-amber-950 hover:bg-amber-200"
               >
-                📝 Note
-              </button>
-              <button
-                onClick={() => {
-                  const c = addChoice;
-                  setAddChoice(null);
-                  openAdd(c.projectId, c.projectName, c.minDate);
-                }}
-                className="flex-1 rounded-md border border-blue-400 bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-500"
-              >
-                ◯ Ambition
+                📝 Note <span className="font-normal text-amber-800">— a sticky reminder</span>
               </button>
             </div>
           </div>

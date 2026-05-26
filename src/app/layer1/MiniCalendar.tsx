@@ -17,10 +17,12 @@ export default function MiniCalendar({
   value,
   onChange,
   minDate,
+  maxDate,
 }: {
   value: string;
   onChange: (isoDate: string) => void;
   minDate?: string; // ISO yyyy-mm-dd; days before this are disabled
+  maxDate?: string; // ISO yyyy-mm-dd; days after this are disabled
 }) {
   const selected = value || iso(new Date());
   const selDate = new Date(selected + "T00:00:00");
@@ -69,7 +71,7 @@ export default function MiniCalendar({
           const cellIso = iso(new Date(year, month, d));
           const isSel = cellIso === selected;
           const isToday = cellIso === today;
-          const disabled = minDate ? cellIso < minDate : false;
+          const disabled = (minDate ? cellIso < minDate : false) || (maxDate ? cellIso > maxDate : false);
           return (
             <button
               type="button"
