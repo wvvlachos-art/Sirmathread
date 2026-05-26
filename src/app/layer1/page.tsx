@@ -134,11 +134,27 @@ export default async function Layer1Page({
       if (c.is_hide_filter) hideValueIds.add(v.id);
     }
   }
-  // Every tag value applied to a project, including via its nodes.
+  // ---- Ambition tags ----
+  // Fetched separately and defensively: if the ambition_tag_values table hasn't
+  // been created yet, this just yields no tags rather than breaking the page.
+  const ambTagMap: Record<string, string[]> = {};
+  const ambIds = universe.flatMap((p) => (p.ambitions ?? []).map((a) => a.id));
+  if (ambIds.length) {
+    const { data: ambTagRows } = await supabase
+      .from("ambition_tag_values")
+      .select("ambition_id, tag_value_id")
+      .in("ambition_id", ambIds);
+    for (const r of (ambTagRows ?? []) as { ambition_id: string; tag_value_id: string }[]) {
+      (ambTagMap[r.ambition_id] ??= []).push(r.tag_value_id);
+    }
+  }
+
+  // Every tag value applied to a project, including via its nodes and ambitions.
   const projTagSet = (p: DbProject): Set<string> => {
     const ids = new Set<string>();
     for (const t of p.project_tag_values ?? []) ids.add(t.tag_value_id);
     for (const n of p.nodes ?? []) for (const t of n.node_tag_values ?? []) ids.add(t.tag_value_id);
+    for (const a of p.ambitions ?? []) for (const t of ambTagMap[a.id] ?? []) ids.add(t);
     return ids;
   };
 
@@ -240,6 +256,7 @@ export default async function Layer1Page({
       id: p.id,
       name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
       origin: p.origin === "manual" ? "manual" : "gmail",
+      color: p.color,
       archived: p.state === "archived",
       inactive: !!(
         p.last_activity_at &&
@@ -255,6 +272,7 @@ export default async function Layer1Page({
           done: a.done,
           isDeadline: a.is_deadline,
           stage: a.is_deadline ? deadlineStage(a.target_date, a.created_at) : 0,
+          tags: ambTagMap[a.id] ?? [],
         }))
         .sort((a, b) => a.t - b.t),
       notes,

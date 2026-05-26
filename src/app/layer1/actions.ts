@@ -246,6 +246,39 @@ export async function toggleNodeTag(
   return {};
 }
 
+// Toggle a tag on an ambition (add if absent, remove if present).
+export async function toggleAmbitionTag(
+  ambitionId: string,
+  valueId: string
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("ambition_tag_values")
+    .select("tag_value_id")
+    .eq("ambition_id", ambitionId)
+    .eq("tag_value_id", valueId)
+    .maybeSingle();
+  const { error } = existing
+    ? await supabase.from("ambition_tag_values").delete().eq("ambition_id", ambitionId).eq("tag_value_id", valueId)
+    : await supabase.from("ambition_tag_values").insert({ ambition_id: ambitionId, tag_value_id: valueId });
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+// Set (or clear, with null) a project's colour. Null falls back to the
+// origin colour (green for Gmail, blue for manual).
+export async function setProjectColor(
+  projectId: string,
+  color: string | null
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("projects").update({ color }).eq("id", projectId);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
 // Delete a single node (removes it from the canvas; any underlying email row
 // stays in the cache untouched).
 export async function deleteNode(id: string): Promise<{ error?: string }> {

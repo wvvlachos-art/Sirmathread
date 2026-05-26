@@ -11,6 +11,8 @@ import {
   deleteProject,
   toggleProjectTag,
   toggleNodeTag,
+  toggleAmbitionTag,
+  setProjectColor,
   setNodeDeadline,
   clearNodeDeadline,
   setNodeDone,
@@ -39,12 +41,13 @@ type LaneNode = {
   origin: string;
   tags: string[];
 };
-type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number };
+type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number; tags: string[] };
 type Note = { id: string; body: string; x: number; y: number; anchorT: number };
 type Lane = {
   id: string;
   name: string;
   origin: string;
+  color: string | null;
   archived: boolean;
   inactive: boolean;
   nodes: LaneNode[];
@@ -65,6 +68,9 @@ function lerpHex(a: string, b: string, t: number): string {
   const mix = (i: number) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t);
   return "#" + [0, 1, 2].map((i) => mix(i).toString(16).padStart(2, "0")).join("");
 }
+
+// Preset palette for per-project colour-coding.
+const PROJECT_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899"];
 
 const DAY = 86_400_000;
 const NODE = 48;
@@ -235,12 +241,15 @@ export default function Timeline({
       ambitionCount: number;
       archived: boolean;
       tags: string[];
+      color: string | null;
     } | null
   >(null);
   const [projConfirm, setProjConfirm] = useState(false);
-  // Optimistic tag overrides so dots appear/disappear instantly (no refetch).
+  // Optimistic overrides so dots/colours change instantly (no refetch).
   const [nodeTagOverride, setNodeTagOverride] = useState<Record<string, string[]>>({});
   const [projTagOverride, setProjTagOverride] = useState<Record<string, string[]>>({});
+  const [ambTagOverride, setAmbTagOverride] = useState<Record<string, string[]>>({});
+  const [projColorOverride, setProjColorOverride] = useState<Record<string, string | null>>({});
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -547,9 +556,15 @@ export default function Timeline({
     });
   };
 
-  // Current tags for a node/project, respecting any optimistic override.
+  // Current tags for a node/project/ambition, respecting any optimistic override.
   const nodeTagsOf = (n: LaneNode) => nodeTagOverride[n.id] ?? n.tags;
   const projTagsOf = (p: Lane) => projTagOverride[p.id] ?? p.tags;
+  const ambTagsOf = (a: Ambition) => ambTagOverride[a.id] ?? a.tags;
+  // A project's colour (custom if set, else the origin colour).
+  const projColorOf = (p: Lane) => {
+    const c = p.id in projColorOverride ? projColorOverride[p.id] : p.color;
+    return c ?? colorFor(p.origin);
+  };
 
   // Toggle instantly in the UI; save in the background; revert if the save fails.
   const applyNodeTag = (id: string, valueId: string, current: string[]) => {
@@ -574,6 +589,25 @@ export default function Timeline({
         setProjTagOverride((prev) => ({ ...prev, [id]: current }));
         alert("Could not update tag: " + res.error);
       }
+    });
+  };
+  const applyAmbTag = (id: string, valueId: string, current: string[]) => {
+    const next = current.includes(valueId)
+      ? current.filter((x) => x !== valueId)
+      : [...current, valueId];
+    setAmbTagOverride((prev) => ({ ...prev, [id]: next }));
+    toggleAmbitionTag(id, valueId).then((res) => {
+      if (res?.error) {
+        setAmbTagOverride((prev) => ({ ...prev, [id]: current }));
+        alert("Could not update tag: " + res.error);
+      }
+    });
+  };
+  // Set a project's colour optimistically (null = back to origin colour).
+  const applyProjColor = (id: string, color: string | null) => {
+    setProjColorOverride((prev) => ({ ...prev, [id]: color }));
+    setProjectColor(id, color).then((res) => {
+      if (res?.error) alert("Could not set colour: " + res.error);
     });
   };
 
@@ -656,7 +690,14 @@ export default function Timeline({
               const centerY = laneH / 2;
               const ptags = projTagsOf(p);
               const last = p.nodes[p.nodes.length - 1];
-              const wireColor = wire.mix === 0 ? NEUTRAL_WIRE : lerpHex(NEUTRAL_WIRE, colorFor(p.origin), wire.mix);
+              // A project's own colour (if set) shows at every zoom; otherwise the
+              // wire follows the grey → origin-colour ramp.
+              const customColor = p.id in projColorOverride ? projColorOverride[p.id] : p.color;
+              const wireColor = customColor
+                ? customColor
+                : wire.mix === 0
+                ? NEUTRAL_WIRE
+                : lerpHex(NEUTRAL_WIRE, colorFor(p.origin), wire.mix);
 
               // Group nodes that bunch up in time. A cluster of 2+ collapses into a
               // single "count" marker; its members' titles fan out above/below the
@@ -710,6 +751,7 @@ export default function Timeline({
                             ambitionCount: p.ambitions.length,
                             archived: p.archived,
                             tags: projTagsOf(p),
+                            color: customColor,
                           })
                     }
                     className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-zinc-800 bg-zinc-950 px-4 hover:bg-zinc-900"
@@ -733,7 +775,7 @@ export default function Timeline({
                     )}
                     <span
                       className="inline-block h-3 w-3 shrink-0 rounded-full"
-                      style={{ background: colorFor(p.origin) }}
+                      style={{ background: projColorOf(p) }}
                     />
                     <span className="line-clamp-2 text-sm font-medium leading-tight" title={p.name}>{p.name}</span>
                     {ptags.length > 0 && (
@@ -961,12 +1003,13 @@ export default function Timeline({
                         const a = cl[0];
                         const cx = xFor(a.t);
                         const isHi = highlight?.id === a.id;
+                        const atags = ambTagsOf(a);
                         return (
                           <g
                             key={a.id}
                             className="cursor-pointer"
                             opacity={highlight ? (isHi ? 1 : 0.2) : 1}
-                            onClick={() => toggle(a.id, !a.done)}
+                            onClick={() => (armed ? applyAmbTag(a.id, armed.id, atags) : toggle(a.id, !a.done))}
                           >
                             {isHi && (
                               <circle cx={cx} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
@@ -996,6 +1039,19 @@ export default function Timeline({
                                 ✓
                               </text>
                             )}
+                            {!a.done &&
+                              atags.map((tid, di) => (
+                                <circle
+                                  key={tid}
+                                  className="tag-pop"
+                                  cx={cx - ((atags.length - 1) * 7) / 2 + di * 7}
+                                  cy={centerY + AMB_R - 8}
+                                  r={2.6}
+                                  fill={tagColors[tid] ?? "#a1a1aa"}
+                                  stroke="#00000066"
+                                  strokeWidth={0.75}
+                                />
+                              ))}
                             <title>
                               Ambition: {a.title} — target {fmtEU(a.t)}
                               {a.done ? " (done — click to reopen)" : " (click to mark done)"}
@@ -1049,10 +1105,12 @@ export default function Timeline({
                             }
                             onMouseLeave={() => setPeek(null)}
                             onClick={() =>
-                              setClusterMenu({
-                                projectName: p.name,
-                                items: cl.map((a) => ({ id: a.id, kind: "ambition" as const, label: a.title, t: a.t, done: a.done })),
-                              })
+                              armed
+                                ? cl.forEach((a) => applyAmbTag(a.id, armed.id, ambTagsOf(a)))
+                                : setClusterMenu({
+                                    projectName: p.name,
+                                    items: cl.map((a) => ({ id: a.id, kind: "ambition" as const, label: a.title, t: a.t, done: a.done })),
+                                  })
                             }
                           >
                             {hiInCluster && (
@@ -1448,11 +1506,23 @@ export default function Timeline({
                 const tagVal = categories.flatMap((c) => c.values).find((v) => v.id === tagFindId);
                 const tagName = tagVal?.value ?? "tag";
                 const tagColor = tagVal?.color ?? tagColors[tagFindId] ?? "#a1a1aa";
-                const matches: { id: string; label: string; t: number; done: boolean; project: string; origin: string; lane: number }[] = [];
+                const matches: {
+                  id: string;
+                  kind: "node" | "ambition";
+                  label: string;
+                  t: number;
+                  done: boolean;
+                  project: string;
+                  origin: string;
+                  lane: number;
+                }[] = [];
                 lanes.forEach((p, li) => {
                   for (const n of p.nodes)
                     if (nodeTagsOf(n).includes(tagFindId))
-                      matches.push({ id: n.id, label: n.label, t: n.t, done: n.done, project: p.name, origin: p.origin, lane: li });
+                      matches.push({ id: n.id, kind: "node", label: n.label, t: n.t, done: n.done, project: p.name, origin: p.origin, lane: li });
+                  for (const a of p.ambitions)
+                    if (ambTagsOf(a).includes(tagFindId))
+                      matches.push({ id: a.id, kind: "ambition", label: a.title, t: a.t, done: a.done, project: p.name, origin: p.origin, lane: li });
                 });
                 matches.sort((a, b) => b.t - a.t);
                 return (
@@ -1466,11 +1536,11 @@ export default function Timeline({
                       </button>
                     </div>
                     {matches.length === 0 ? (
-                      <p className="px-1 text-sm text-zinc-500">No nodes carry this tag.</p>
+                      <p className="px-1 text-sm text-zinc-500">Nothing carries this tag yet.</p>
                     ) : (
                       matches.map((u) => (
                         <button
-                          key={u.id}
+                          key={`${u.kind}-${u.id}`}
                           onClick={() => focusOn(u.id, u.t, u.lane)}
                           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
                           title="Show on the timeline"
@@ -1478,6 +1548,7 @@ export default function Timeline({
                           <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
                           <span className="min-w-0 flex-1">
                             <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
+                              <span className="text-zinc-500">{u.kind === "ambition" ? "◯ " : "▢ "}</span>
                               {u.label}
                             </span>
                             <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
@@ -1489,7 +1560,6 @@ export default function Timeline({
                         </button>
                       ))
                     )}
-                    <p className="mt-3 px-1 text-[10px] text-zinc-600">Showing tagged nodes. Ambitions can&apos;t be tagged yet.</p>
                   </>
                 );
               })()
@@ -1877,6 +1947,35 @@ export default function Timeline({
                   {projMenu.nodeCount} node{projMenu.nodeCount === 1 ? "" : "s"} ·{" "}
                   {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
                 </p>
+
+                <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Colour</p>
+                <div className="mb-5 flex flex-wrap items-center gap-2">
+                  {(() => {
+                    const cur = projMenu.id in projColorOverride ? projColorOverride[projMenu.id] : projMenu.color;
+                    return (
+                      <>
+                        {PROJECT_COLORS.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => applyProjColor(projMenu.id, c)}
+                            className={`h-6 w-6 rounded-full border-2 ${cur === c ? "border-white" : "border-transparent"}`}
+                            style={{ background: c }}
+                            title={`Set ${c}`}
+                          />
+                        ))}
+                        <button
+                          onClick={() => applyProjColor(projMenu.id, null)}
+                          title="Use the default (green for Gmail, blue for manual)"
+                          className={`rounded-full border px-2 py-0.5 text-xs ${
+                            cur ? "border-zinc-600 text-zinc-300 hover:bg-zinc-800" : "border-white text-white"
+                          }`}
+                        >
+                          Default
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
 
                 <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
                 <div className="mb-5">
