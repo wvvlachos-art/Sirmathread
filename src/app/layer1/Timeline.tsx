@@ -57,6 +57,15 @@ const GMAIL_COLOR = "#34d399"; // light green
 const MANUAL_COLOR = "#2563eb"; // deep blue
 const colorFor = (origin: string) => (origin === "manual" ? MANUAL_COLOR : GMAIL_COLOR);
 
+// The connector "wire" between nodes. Neutral grey up close; as you zoom out it
+// gets thicker, more opaque, and tinted toward the project's origin colour.
+const NEUTRAL_WIRE = "#3f3f46";
+function lerpHex(a: string, b: string, t: number): string {
+  const ch = (h: string, i: number) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
+  const mix = (i: number) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t);
+  return "#" + [0, 1, 2].map((i) => mix(i).toString(16).padStart(2, "0")).join("");
+}
+
 const DAY = 86_400_000;
 const NODE = 48;
 const AMB_R = 22;
@@ -80,6 +89,10 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 const isoFromMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const fmtEU = (d: string | number) =>
   new Date(typeof d === "string" ? d + "T00:00:00" : d).toLocaleDateString("en-GB");
+
+// Captions get truncated so they stay short under each node.
+const LABEL_MAX = 26;
+const truncLabel = (s: string) => (s.length > LABEL_MAX ? s.slice(0, LABEL_MAX - 1) + "…" : s);
 
 // A little wand (stick + star) used as the cursor while the wand is armed.
 const WAND_SVG =
@@ -149,6 +162,7 @@ export default function Timeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchored = useRef(false);
   const scrollIntent = useRef<"today" | "left" | "right" | null>(null);
+  const scrollTargetT = useRef<number | null>(null);
 
   const [daysPerScreen, setDaysPerScreen] = useState(30);
   const [startMs, setStartMs] = useState(nowMs - INITIAL_BACK * DAY);
@@ -165,6 +179,24 @@ export default function Timeline({
   // Node and project action menus.
   const [nodeMenu, setNodeMenu] = useState<
     { id: string; label: string; tags: string[]; deadline: string | null; done: boolean } | null
+  >(null);
+  const [clusterMenu, setClusterMenu] = useState<
+    {
+      projectName: string;
+      items: {
+        id: string;
+        kind: "node" | "ambition";
+        label: string;
+        t: number;
+        done: boolean;
+        tags?: string[];
+        deadline?: string | null;
+      }[];
+    } | null
+  >(null);
+  // Hover-to-peek list shown next to a count badge.
+  const [peek, setPeek] = useState<
+    { x: number; y: number; title: string; items: { label: string; done: boolean; due: boolean }[] } | null
   >(null);
   const [nodeCalOpen, setNodeCalOpen] = useState(false);
   const [nodeCalDate, setNodeCalDate] = useState(todayIso());
@@ -207,6 +239,21 @@ export default function Timeline({
   const xFor = (t: number) => ((t - startMs) / DAY) * pxPerDay;
   const todayX = xFor(nowMs);
 
+  // A gentle shrink on the zoomed-out spans; the real declutter is the clustering below.
+  const nodeSize = daysPerScreen <= 30 ? NODE : daysPerScreen <= 90 ? 40 : 32;
+  const nodeScale = nodeSize / NODE;
+
+  // Wire prominence grows with the span: thin/faint/grey up close → thick/solid/
+  // origin-coloured zoomed out. `mix` = how far the colour leans to origin colour.
+  const wire =
+    daysPerScreen <= 7
+      ? { w: 1, o: 0.6, mix: 0 }
+      : daysPerScreen <= 30
+      ? { w: 1.25, o: 0.75, mix: 0 }
+      : daysPerScreen <= 90
+      ? { w: 1.5, o: 0.85, mix: 0.4 }
+      : { w: 2, o: 1, mix: 1 };
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -229,13 +276,35 @@ export default function Timeline({
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || !scrollIntent.current) return;
+    if (!el) return;
+    // A pending "jump to this date" (e.g. a project's first node) wins.
+    if (scrollTargetT.current != null) {
+      el.scrollLeft = Math.max(0, LABEL_W + xFor(scrollTargetT.current) - vw / 2);
+      scrollTargetT.current = null;
+      return;
+    }
+    if (!scrollIntent.current) return;
     if (scrollIntent.current === "today") el.scrollLeft = Math.max(0, todayX - vw * 0.65);
     else if (scrollIntent.current === "left") el.scrollLeft = vw * 0.1;
     else if (scrollIntent.current === "right") el.scrollLeft = canvasW - vw * 1.05;
     scrollIntent.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startMs, endMs, pxPerDay]);
+
+  // Centre the calendar on a given date, expanding the loaded range back/forward
+  // if that date isn't currently in view.
+  const jumpToTime = (t: number) => {
+    const margin = 14 * DAY;
+    if (t - margin < startMs) {
+      scrollTargetT.current = t;
+      setStartMs(Math.max(nowMs - MAX_SPAN_DAYS * DAY, t - margin));
+    } else if (t + margin > endMs) {
+      scrollTargetT.current = t;
+      setEndMs(Math.min(nowMs + MAX_SPAN_DAYS * DAY, t + margin));
+    } else {
+      scrollRef.current?.scrollTo({ left: Math.max(0, LABEL_W + xFor(t) - vw / 2), behavior: "smooth" });
+    }
+  };
 
   const zoomTo = (d: number) => {
     scrollIntent.current = "today";
@@ -281,6 +350,15 @@ export default function Timeline({
   const toggle = async (id: string, done: boolean) => {
     await toggleAmbition(id, done);
     router.refresh();
+  };
+  // Open a node: stamp it if the wand is armed, otherwise show its menu.
+  const openNode = (n: LaneNode) => {
+    if (armed) {
+      applyNodeTag(n.id, armed.id, nodeTagsOf(n));
+      return;
+    }
+    setNodeCalOpen(false);
+    setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n), deadline: n.deadline, done: n.done });
   };
   const removeNode = async () => {
     if (!nodeMenu) return;
@@ -499,9 +577,41 @@ export default function Timeline({
               const centerY = laneH / 2;
               const ptags = projTagsOf(p);
               const last = p.nodes[p.nodes.length - 1];
+              const wireColor = wire.mix === 0 ? NEUTRAL_WIRE : lerpHex(NEUTRAL_WIRE, colorFor(p.origin), wire.mix);
+
+              // Group nodes that bunch up in time. A cluster of 2+ collapses into a
+              // single "count" marker; its members' titles fan out above/below the
+              // line, each with a thin leader to its exact spot.
+              const clusters: LaneNode[][] = [];
+              {
+                const minGapX = nodeSize + 6;
+                const ns = p.nodes; // already sorted by time
+                let i = 0;
+                while (i < ns.length) {
+                  let j = i + 1;
+                  while (j < ns.length && xFor(ns[j].t) - xFor(ns[j - 1].t) < minGapX) j++;
+                  clusters.push(ns.slice(i, j));
+                  i = j;
+                }
+              }
+
+              // Same idea for ambitions (round markers are bigger, so a wider gap).
+              const ambClusters: Ambition[][] = [];
+              {
+                const ambGapX = 2 * AMB_R + 4;
+                const as = p.ambitions; // already sorted by time
+                let i = 0;
+                while (i < as.length) {
+                  let j = i + 1;
+                  while (j < as.length && xFor(as[j].t) - xFor(as[j - 1].t) < ambGapX) j++;
+                  ambClusters.push(as.slice(i, j));
+                  i = j;
+                }
+              }
+
               const anchorX = last ? xFor(last.t) : todayX;
-              const plusX = anchorX + (last ? NODE / 2 : 0);
-              const plusY = centerY - (last ? NODE / 2 : 14);
+              const plusX = anchorX + (last ? nodeSize / 2 : 0);
+              const plusY = centerY - (last ? nodeSize / 2 : 14);
               // Floor only at the latest node (keeps chains in order). An empty
               // project has no floor, so you can backdate when recreating history.
               const minDate = last ? isoFromMs(last.t) : "";
@@ -527,11 +637,26 @@ export default function Timeline({
                     style={{ width: LABEL_W, height: laneH }}
                     title={armed ? `Stamp "${armed.value}"` : "Project options"}
                   >
+                    {p.nodes.length > 0 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          jumpToTime(p.nodes[0].t);
+                        }}
+                        title="Jump to the start of this project"
+                        className="shrink-0 text-zinc-500 hover:text-zinc-200"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                          <rect x="5" y="5" width="2.4" height="14" rx="1" fill="currentColor" />
+                          <path d="M20 5 L9 12 L20 19 Z" fill="currentColor" />
+                        </svg>
+                      </button>
+                    )}
                     <span
                       className="inline-block h-3 w-3 shrink-0 rounded-full"
                       style={{ background: colorFor(p.origin) }}
                     />
-                    <span className="truncate text-sm font-medium">{p.name}</span>
+                    <span className="line-clamp-2 text-sm font-medium leading-tight" title={p.name}>{p.name}</span>
                     {ptags.length > 0 && (
                       <span className="flex shrink-0 items-center gap-0.5">
                         {ptags.map((tid) => (
@@ -569,18 +694,16 @@ export default function Timeline({
                     ))}
                     <line x1={todayX} y1={0} x2={todayX} y2={laneH} stroke="#3f3722" />
 
-                    {p.nodes.map((n, i) =>
-                      i === 0 ? null : (
-                        <line
-                          key={`w-${n.id}`}
-                          x1={xFor(p.nodes[i - 1].t)}
-                          y1={centerY}
-                          x2={xFor(n.t)}
-                          y2={centerY}
-                          stroke="#3f3f46"
-                          strokeWidth={2}
-                        />
-                      )
+                    {p.nodes.length > 1 && (
+                      <line
+                        x1={xFor(p.nodes[0].t)}
+                        y1={centerY}
+                        x2={xFor(last.t)}
+                        y2={centerY}
+                        stroke={wireColor}
+                        strokeWidth={wire.w}
+                        strokeOpacity={wire.o}
+                      />
                     )}
 
                     {p.ambitions.map((a) => (
@@ -613,117 +736,236 @@ export default function Timeline({
                       );
                     })}
 
-                    {/* square nodes */}
-                    {p.nodes.map((n) => {
-                      const cx = xFor(n.t);
-                      const left = cx - NODE / 2;
-                      const top = centerY - NODE / 2;
-                      const ntags = nodeTagsOf(n);
-                      const matchesFilter =
-                        (!selectedTags.length || ntags.some((t) => selectedTags.includes(t))) &&
-                        (!deadlineActive || !!n.deadline);
-                      const dim = n.done || (filterActive && !matchesFilter);
-                      return (
-                        <g
-                          key={n.id}
-                          className="cursor-pointer"
-                          opacity={dim ? 0.4 : 1}
-                          onClick={() => {
-                            if (armed) {
-                              applyNodeTag(n.id, armed.id, nodeTagsOf(n));
-                            } else {
-                              setNodeCalOpen(false);
-                              setNodeMenu({
-                                id: n.id,
-                                label: n.label,
-                                tags: nodeTagsOf(n),
-                                deadline: n.deadline,
-                                done: n.done,
-                              });
-                            }
-                          }}
-                        >
-                          <g transform={`translate(${left}, ${top})`}>
-                            <rect
-                              width={NODE}
-                              height={NODE}
-                              rx={10}
-                              ry={10}
-                              fill={n.done ? "#6b7280" : colorFor(n.origin)}
-                            />
-                            {!n.done && n.stage > 0 && (
-                              <rect
-                                width={(NODE * n.stage) / 100}
-                                height={NODE}
-                                fill="#ef4444"
-                                clipPath={`url(#clip-${n.id})`}
-                              />
-                            )}
-                            {(() => {
-                              const pos = pipPositions(ntags.length);
-                              return ntags.map((tid, di) => (
-                                <circle
-                                  key={tid}
-                                  className="tag-pop"
-                                  cx={pos[di].x}
-                                  cy={pos[di].y}
-                                  r={pos[di].r}
-                                  fill={tagColors[tid] ?? "#a1a1aa"}
-                                  stroke="#00000066"
-                                  strokeWidth={0.75}
-                                />
-                              ));
-                            })()}
-                            <title>
-                              {n.label}
-                              {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}
-                              {n.done ? " (done)" : ""}
-                            </title>
+                    {/* nodes: lone ones as squares; bunched ones as a single count marker */}
+                    {clusters.map((cl) => {
+                      // ---- a single node on its own ----
+                      if (cl.length === 1) {
+                        const n = cl[0];
+                        const cx = xFor(n.t);
+                        const left = cx - nodeSize / 2;
+                        const top = centerY - nodeSize / 2;
+                        const ntags = nodeTagsOf(n);
+                        const matchesFilter =
+                          (!selectedTags.length || ntags.some((t) => selectedTags.includes(t))) &&
+                          (!deadlineActive || !!n.deadline);
+                        const dim = n.done || (filterActive && !matchesFilter);
+                        return (
+                          <g key={n.id} className="cursor-pointer" opacity={dim ? 0.4 : 1} onClick={() => openNode(n)}>
+                            <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
+                              <rect width={NODE} height={NODE} rx={10} ry={10} fill={n.done ? "#6b7280" : colorFor(n.origin)} />
+                              {!n.done && n.stage > 0 && (
+                                <rect width={(NODE * n.stage) / 100} height={NODE} fill="#ef4444" clipPath={`url(#clip-${n.id})`} />
+                              )}
+                              {(() => {
+                                const pos = pipPositions(ntags.length);
+                                return ntags.map((tid, di) => (
+                                  <circle
+                                    key={tid}
+                                    className="tag-pop"
+                                    cx={pos[di].x}
+                                    cy={pos[di].y}
+                                    r={pos[di].r}
+                                    fill={tagColors[tid] ?? "#a1a1aa"}
+                                    stroke="#00000066"
+                                    strokeWidth={0.75}
+                                  />
+                                ));
+                              })()}
+                              <title>
+                                {n.label}
+                                {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}
+                                {n.done ? " (done)" : ""}
+                              </title>
+                            </g>
+                            <text x={cx} y={top + nodeSize + 13} fill="#a1a1aa" fontSize={11} textAnchor="middle">
+                              {truncLabel(n.label)}
+                            </text>
                           </g>
-                          <text x={cx} y={top + NODE + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
-                            {n.label.length > 26 ? n.label.slice(0, 25) + "…" : n.label}
-                          </text>
+                        );
+                      }
+
+                      // ---- a bunch of nodes, collapsed into one count marker ----
+                      const xs = cl.map((n) => xFor(n.t));
+                      const cxC = (Math.min(...xs) + Math.max(...xs)) / 2;
+                      const left = cxC - nodeSize / 2;
+                      const top = centerY - nodeSize / 2;
+                      const doneCount = cl.filter((n) => n.done).length;
+                      const allDone = doneCount === cl.length;
+                      const anyDeadline = cl.some((n) => n.deadline && !n.done);
+                      const rowH = 14;
+                      return (
+                        <g key={`cl-${cl[0].id}`}>
+                          {/* each member's title, fanned up/down with a leader to its exact spot */}
+                          {cl.map((n, k) => {
+                            const mx = xFor(n.t);
+                            const up = k % 2 === 0;
+                            const level = Math.floor(k / 2);
+                            const ty = up
+                              ? centerY - nodeSize / 2 - 8 - level * rowH
+                              : centerY + nodeSize / 2 + 16 + level * rowH;
+                            if (ty < 10 || ty > laneH - 4) return null; // would fall outside the lane
+                            const short = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+                            return (
+                              <g key={n.id} className="cursor-pointer" onClick={() => openNode(n)}>
+                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke="#52525b" strokeWidth={1} />
+                                <circle cx={mx} cy={centerY} r={2.5} fill="#a1a1aa" />
+                                <text x={mx} y={ty} fill="#d4d4d8" fontSize={10} textAnchor="middle">
+                                  {short}
+                                </text>
+                              </g>
+                            );
+                          })}
+                          {/* the count marker itself */}
+                          <g
+                            className="cursor-pointer"
+                            onMouseEnter={(e) =>
+                              setPeek({
+                                x: e.clientX,
+                                y: e.clientY,
+                                title: `${cl.length} items · ${p.name}`,
+                                items: cl.map((n) => ({ label: n.label, done: n.done, due: !!n.deadline && !n.done })),
+                              })
+                            }
+                            onMouseLeave={() => setPeek(null)}
+                            onClick={() =>
+                              armed
+                                ? cl.forEach((n) => applyNodeTag(n.id, armed.id, nodeTagsOf(n)))
+                                : setClusterMenu({
+                                    projectName: p.name,
+                                    items: cl.map((n) => ({
+                                      id: n.id,
+                                      kind: "node" as const,
+                                      label: n.label,
+                                      t: n.t,
+                                      done: n.done,
+                                      tags: nodeTagsOf(n),
+                                      deadline: n.deadline,
+                                    })),
+                                  })
+                            }
+                          >
+                            <rect x={left} y={top} width={nodeSize} height={nodeSize} rx={10} ry={10} fill={allDone ? "#6b7280" : colorFor(p.origin)} stroke="#0a0a0a" strokeWidth={1.5} />
+                            <text x={cxC} y={centerY + 6} fill={allDone ? "#d4d4d8" : "#fff"} fontSize={17} fontWeight={700} textAnchor="middle">
+                              {cl.length}
+                            </text>
+                            {anyDeadline && <circle cx={left + nodeSize - 5} cy={top + 5} r={3.5} fill="#ef4444" stroke="#0a0a0a" strokeWidth={1} />}
+                            {doneCount > 0 && !allDone && (
+                              <circle cx={left + 5} cy={top + 5} r={3.5} fill="#22c55e" stroke="#0a0a0a" strokeWidth={1} />
+                            )}
+                          </g>
                         </g>
                       );
                     })}
 
-                    {/* round ambitions */}
-                    {p.ambitions.map((a) => {
-                      const cx = xFor(a.t);
-                      return (
-                        <g key={a.id} className="cursor-pointer" onClick={() => toggle(a.id, !a.done)}>
-                          <circle
-                            cx={cx}
-                            cy={centerY}
-                            r={AMB_R}
-                            fill={a.done ? "#3f3f46" : colorFor(p.origin)}
-                            fillOpacity={a.done ? 0.5 : 0.9}
-                            stroke="#e4e4e7"
-                            strokeWidth={1.5}
-                            strokeDasharray="4 3"
-                          />
-                          {a.isDeadline && !a.done && a.stage > 0 && (
-                            <rect
-                              x={cx - AMB_R}
-                              y={centerY - AMB_R}
-                              width={(2 * AMB_R * a.stage) / 100}
-                              height={2 * AMB_R}
-                              fill="#ef4444"
-                              clipPath={`url(#aclip-${a.id})`}
+                    {/* round ambitions — lone ones as circles, bunched ones as a count marker */}
+                    {ambClusters.map((cl) => {
+                      // ---- a single ambition ----
+                      if (cl.length === 1) {
+                        const a = cl[0];
+                        const cx = xFor(a.t);
+                        return (
+                          <g key={a.id} className="cursor-pointer" onClick={() => toggle(a.id, !a.done)}>
+                            <circle
+                              cx={cx}
+                              cy={centerY}
+                              r={AMB_R}
+                              fill={a.done ? "#3f3f46" : colorFor(p.origin)}
+                              fillOpacity={a.done ? 0.5 : 0.9}
+                              stroke="#e4e4e7"
+                              strokeWidth={1.5}
+                              strokeDasharray="4 3"
                             />
-                          )}
-                          {a.done && (
-                            <text x={cx} y={centerY + 5} fill="#e4e4e7" fontSize={16} textAnchor="middle">
-                              ✓
+                            {a.isDeadline && !a.done && a.stage > 0 && (
+                              <rect
+                                x={cx - AMB_R}
+                                y={centerY - AMB_R}
+                                width={(2 * AMB_R * a.stage) / 100}
+                                height={2 * AMB_R}
+                                fill="#ef4444"
+                                clipPath={`url(#aclip-${a.id})`}
+                              />
+                            )}
+                            {a.done && (
+                              <text x={cx} y={centerY + 5} fill="#e4e4e7" fontSize={16} textAnchor="middle">
+                                ✓
+                              </text>
+                            )}
+                            <title>
+                              Ambition: {a.title} — target {fmtEU(a.t)}
+                              {a.done ? " (done — click to reopen)" : " (click to mark done)"}
+                            </title>
+                            <text x={cx} y={centerY + AMB_R + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
+                              {truncLabel(a.title)}
                             </text>
-                          )}
-                          <title>
-                            Ambition: {a.title} — target {fmtEU(a.t)}
-                            {a.done ? " (done — click to reopen)" : " (click to mark done)"}
-                          </title>
-                          <text x={cx} y={centerY + AMB_R + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
-                            {a.title.length > 26 ? a.title.slice(0, 25) + "…" : a.title}
-                          </text>
+                          </g>
+                        );
+                      }
+
+                      // ---- a bunch of ambitions, collapsed into one count marker ----
+                      const xs = cl.map((a) => xFor(a.t));
+                      const cxC = (Math.min(...xs) + Math.max(...xs)) / 2;
+                      const doneCount = cl.filter((a) => a.done).length;
+                      const allDone = doneCount === cl.length;
+                      const anyDue = cl.some((a) => a.isDeadline && !a.done);
+                      const rowH = 14;
+                      return (
+                        <g key={`acl-${cl[0].id}`}>
+                          {cl.map((a, k) => {
+                            const mx = xFor(a.t);
+                            const up = k % 2 === 0;
+                            const level = Math.floor(k / 2);
+                            const ty = up
+                              ? centerY - AMB_R - 8 - level * rowH
+                              : centerY + AMB_R + 16 + level * rowH;
+                            if (ty < 10 || ty > laneH - 4) return null;
+                            const short = a.title.length > 16 ? a.title.slice(0, 15) + "…" : a.title;
+                            return (
+                              <g key={a.id} className="cursor-pointer" onClick={() => toggle(a.id, !a.done)}>
+                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke="#52525b" strokeWidth={1} strokeDasharray="2 2" />
+                                <circle cx={mx} cy={centerY} r={2.5} fill="#a1a1aa" />
+                                <text x={mx} y={ty} fill="#d4d4d8" fontSize={10} textAnchor="middle">
+                                  {a.done ? "✓ " : ""}
+                                  {short}
+                                </text>
+                              </g>
+                            );
+                          })}
+                          <g
+                            className="cursor-pointer"
+                            onMouseEnter={(e) =>
+                              setPeek({
+                                x: e.clientX,
+                                y: e.clientY,
+                                title: `${cl.length} ambitions · ${p.name}`,
+                                items: cl.map((a) => ({ label: a.title, done: a.done, due: a.isDeadline && !a.done })),
+                              })
+                            }
+                            onMouseLeave={() => setPeek(null)}
+                            onClick={() =>
+                              setClusterMenu({
+                                projectName: p.name,
+                                items: cl.map((a) => ({ id: a.id, kind: "ambition" as const, label: a.title, t: a.t, done: a.done })),
+                              })
+                            }
+                          >
+                            <circle
+                              cx={cxC}
+                              cy={centerY}
+                              r={AMB_R}
+                              fill={allDone ? "#3f3f46" : colorFor(p.origin)}
+                              fillOpacity={allDone ? 0.5 : 0.9}
+                              stroke="#e4e4e7"
+                              strokeWidth={1.5}
+                              strokeDasharray="4 3"
+                            />
+                            <text x={cxC} y={centerY + 6} fill="#fff" fontSize={17} fontWeight={700} textAnchor="middle">
+                              {cl.length}
+                            </text>
+                            {anyDue && <circle cx={cxC + AMB_R - 5} cy={centerY - AMB_R + 5} r={3.5} fill="#ef4444" stroke="#0a0a0a" strokeWidth={1} />}
+                            {doneCount > 0 && !allDone && (
+                              <circle cx={cxC - AMB_R + 5} cy={centerY - AMB_R + 5} r={3.5} fill="#22c55e" stroke="#0a0a0a" strokeWidth={1} />
+                            )}
+                          </g>
                         </g>
                       );
                     })}
@@ -857,6 +1099,31 @@ export default function Timeline({
           </div>
         )}
       </div>
+
+      {/* Hover-to-peek list for a count badge */}
+      {peek && (
+        <div
+          className="pointer-events-none fixed z-50 w-56 rounded-md border border-zinc-700 bg-zinc-900/95 p-2 text-xs shadow-xl backdrop-blur"
+          style={{
+            left: Math.min(peek.x + 14, (typeof window !== "undefined" ? window.innerWidth : 9999) - 240),
+            top: peek.y + 14,
+          }}
+        >
+          <div className="mb-1 truncate font-medium text-zinc-300">{peek.title}</div>
+          <ul className="flex max-h-60 flex-col gap-0.5 overflow-hidden">
+            {peek.items.map((it, i) => (
+              <li key={i} className="flex items-center gap-1.5">
+                <span
+                  className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                    it.done ? "bg-zinc-500" : it.due ? "bg-red-500" : "bg-emerald-400"
+                  }`}
+                />
+                <span className={`truncate ${it.done ? "text-zinc-500 line-through" : "text-zinc-300"}`}>{it.label}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Magic-wand active banner */}
       {armed && (
@@ -996,6 +1263,47 @@ export default function Timeline({
               </button>
               <button onClick={submitNote} disabled={busy} className={primary}>
                 {busy ? "Adding…" : "Add note"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cluster list: the items collapsed under a count marker */}
+      {clusterMenu && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => setClusterMenu(null)}>
+          <div onClick={(e) => e.stopPropagation()} className={card}>
+            <h2 className="mb-1 text-lg font-semibold text-zinc-100">{clusterMenu.items.length} items</h2>
+            <p className="mb-4 text-sm text-zinc-400">{clusterMenu.projectName} · same stretch of time</p>
+            <div className="flex max-h-[50vh] flex-col gap-1 overflow-auto">
+              {clusterMenu.items.map((it) => (
+                <button
+                  key={it.id}
+                  onClick={() => {
+                    setClusterMenu(null);
+                    if (it.kind === "ambition") {
+                      toggle(it.id, !it.done);
+                    } else {
+                      setNodeCalOpen(false);
+                      setNodeMenu({ id: it.id, label: it.label, tags: it.tags ?? [], deadline: it.deadline ?? null, done: it.done });
+                    }
+                  }}
+                  className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+                >
+                  <span className="truncate">
+                    {it.kind === "ambition" ? "◯ " : ""}
+                    {it.label}
+                  </span>
+                  <span className="shrink-0 text-xs text-zinc-500">
+                    {fmtEU(it.t)}
+                    {it.done ? " ✓" : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button onClick={() => setClusterMenu(null)} className={ghost}>
+                Close
               </button>
             </div>
           </div>
