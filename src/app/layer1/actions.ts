@@ -25,6 +25,63 @@ export async function createAmbition(
   return {};
 }
 
+// Edit a node's title and/or date. Date is "YYYY-MM-DD"; stored at 09:00 UTC.
+// (For Gmail-sourced nodes the timeline position follows the email date, so the
+// caller only offers date editing for manual nodes.)
+export async function updateNode(
+  id: string,
+  fields: { label?: string; date?: string }
+): Promise<{ error?: string }> {
+  const patch: { display_label?: string; node_date?: string } = {};
+  if (fields.label !== undefined) {
+    const clean = fields.label.trim();
+    if (!clean) return { error: "Title is required." };
+    patch.display_label = clean;
+  }
+  if (fields.date !== undefined) {
+    if (!fields.date) return { error: "Date is required." };
+    patch.node_date = `${fields.date}T09:00:00Z`;
+  }
+  if (Object.keys(patch).length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("nodes").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+// Edit an ambition's title, target date, and/or deadline flag.
+export async function updateAmbition(
+  id: string,
+  fields: { title?: string; targetDate?: string; isDeadline?: boolean }
+): Promise<{ error?: string }> {
+  const patch: { title?: string; target_date?: string; is_deadline?: boolean } = {};
+  if (fields.title !== undefined) {
+    const clean = fields.title.trim();
+    if (!clean) return { error: "Title is required." };
+    patch.title = clean;
+  }
+  if (fields.targetDate !== undefined) {
+    if (!fields.targetDate) return { error: "Date is required." };
+    patch.target_date = fields.targetDate;
+  }
+  if (fields.isDeadline !== undefined) patch.is_deadline = fields.isDeadline;
+  if (Object.keys(patch).length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("ambitions").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
+export async function deleteAmbition(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("ambitions").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/layer1");
+  return {};
+}
+
 // Set / clear a node's deadline; the countdown runs from now → the date.
 export async function setNodeDeadline(id: string, date: string): Promise<{ error?: string }> {
   if (!date) return { error: "Date is required." };

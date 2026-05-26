@@ -6,6 +6,9 @@ import {
   createAmbition,
   createManualNode,
   toggleAmbition,
+  updateNode,
+  updateAmbition,
+  deleteAmbition,
   deleteNode,
   archiveProject,
   deleteProject,
@@ -194,8 +197,20 @@ export default function Timeline({
 
   // Node and project action menus.
   const [nodeMenu, setNodeMenu] = useState<
-    { id: string; label: string; tags: string[]; deadline: string | null; done: boolean } | null
+    { id: string; label: string; tags: string[]; deadline: string | null; done: boolean; origin: string; dateIso: string } | null
   >(null);
+  // Inline title/date editing inside the node menu.
+  const [editLabel, setEditLabel] = useState("");
+  const [editDate, setEditDate] = useState(todayIso());
+  const [editDateOpen, setEditDateOpen] = useState(false);
+  // Ambition menu (open / edit / tag / delete a single ambition).
+  const [ambMenu, setAmbMenu] = useState<
+    { id: string; title: string; t: number; isDeadline: boolean; done: boolean; tags: string[] } | null
+  >(null);
+  const [ambEditTitle, setAmbEditTitle] = useState("");
+  const [ambEditDate, setAmbEditDate] = useState(todayIso());
+  const [ambEditDateOpen, setAmbEditDateOpen] = useState(false);
+  const [ambEditDeadline, setAmbEditDeadline] = useState(false);
   const [clusterMenu, setClusterMenu] = useState<
     {
       projectName: string;
@@ -207,6 +222,7 @@ export default function Timeline({
         done: boolean;
         tags?: string[];
         deadline?: string | null;
+        origin?: string;
       }[];
     } | null
   >(null);
@@ -446,7 +462,70 @@ export default function Timeline({
       return;
     }
     setNodeCalOpen(false);
-    setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n), deadline: n.deadline, done: n.done });
+    setEditDateOpen(false);
+    setEditLabel(n.label);
+    setEditDate(isoFromMs(n.t));
+    setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n), deadline: n.deadline, done: n.done, origin: n.origin, dateIso: isoFromMs(n.t) });
+  };
+  const saveNodeEdits = async () => {
+    if (!nodeMenu) return;
+    const fields: { label?: string; date?: string } = {};
+    if (editLabel.trim() !== nodeMenu.label) fields.label = editLabel;
+    if (nodeMenu.origin === "manual" && editDate !== nodeMenu.dateIso) fields.date = editDate;
+    if (Object.keys(fields).length === 0) {
+      setNodeMenu(null);
+      return;
+    }
+    setBusy(true);
+    const res = await updateNode(nodeMenu.id, fields);
+    setBusy(false);
+    if (res.error) {
+      alert(res.error);
+      return;
+    }
+    setNodeMenu(null);
+    router.refresh();
+  };
+
+  // Open an ambition: stamp it if armed, otherwise show its menu.
+  const openAmbition = (a: Ambition) => {
+    if (armed) {
+      applyAmbTag(a.id, armed.id, ambTagsOf(a));
+      return;
+    }
+    setAmbEditTitle(a.title);
+    setAmbEditDate(isoFromMs(a.t));
+    setAmbEditDateOpen(false);
+    setAmbEditDeadline(a.isDeadline);
+    setAmbMenu({ id: a.id, title: a.title, t: a.t, isDeadline: a.isDeadline, done: a.done, tags: ambTagsOf(a) });
+  };
+  const saveAmbEdits = async () => {
+    if (!ambMenu) return;
+    const fields: { title?: string; targetDate?: string; isDeadline?: boolean } = {};
+    if (ambEditTitle.trim() !== ambMenu.title) fields.title = ambEditTitle;
+    if (ambEditDate !== isoFromMs(ambMenu.t)) fields.targetDate = ambEditDate;
+    if (ambEditDeadline !== ambMenu.isDeadline) fields.isDeadline = ambEditDeadline;
+    if (Object.keys(fields).length === 0) {
+      setAmbMenu(null);
+      return;
+    }
+    setBusy(true);
+    const res = await updateAmbition(ambMenu.id, fields);
+    setBusy(false);
+    if (res.error) {
+      alert(res.error);
+      return;
+    }
+    setAmbMenu(null);
+    router.refresh();
+  };
+  const removeAmbition = async () => {
+    if (!ambMenu) return;
+    setBusy(true);
+    await deleteAmbition(ambMenu.id);
+    setBusy(false);
+    setAmbMenu(null);
+    router.refresh();
   };
   const removeNode = async () => {
     if (!nodeMenu) return;
@@ -637,7 +716,7 @@ export default function Timeline({
         ? "bg-zinc-100 text-zinc-900"
         : "border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:bg-zinc-800"
     }`;
-  const card = "w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+  const card = "max-h-[85vh] w-full max-w-sm overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
   const primary = "rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60";
   const ghost = "rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800";
   const danger = "rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60";
@@ -976,6 +1055,7 @@ export default function Timeline({
                                       done: n.done,
                                       tags: nodeTagsOf(n),
                                       deadline: n.deadline,
+                                      origin: n.origin,
                                     })),
                                   })
                             }
@@ -1009,7 +1089,7 @@ export default function Timeline({
                             key={a.id}
                             className="cursor-pointer"
                             opacity={highlight ? (isHi ? 1 : 0.2) : 1}
-                            onClick={() => (armed ? applyAmbTag(a.id, armed.id, atags) : toggle(a.id, !a.done))}
+                            onClick={() => openAmbition(a)}
                           >
                             {isHi && (
                               <circle cx={cx} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
@@ -1060,7 +1140,7 @@ export default function Timeline({
                               })()}
                             <title>
                               Ambition: {a.title} — target {fmtEU(a.t)}
-                              {a.done ? " (done — click to reopen)" : " (click to mark done)"}
+                              {a.done ? " (done)" : ""} — click to open
                             </title>
                             <text x={cx} y={centerY + AMB_R + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
                               {truncLabel(a.title)}
@@ -1822,7 +1902,18 @@ export default function Timeline({
                       toggle(it.id, !it.done);
                     } else {
                       setNodeCalOpen(false);
-                      setNodeMenu({ id: it.id, label: it.label, tags: it.tags ?? [], deadline: it.deadline ?? null, done: it.done });
+                      setEditDateOpen(false);
+                      setEditLabel(it.label);
+                      setEditDate(isoFromMs(it.t));
+                      setNodeMenu({
+                        id: it.id,
+                        label: it.label,
+                        tags: it.tags ?? [],
+                        deadline: it.deadline ?? null,
+                        done: it.done,
+                        origin: it.origin ?? "manual",
+                        dateIso: isoFromMs(it.t),
+                      });
                     }
                   }}
                   className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
@@ -1851,8 +1942,34 @@ export default function Timeline({
       {nodeMenu && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNodeMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Node</h2>
-            <p className="mb-4 text-sm text-zinc-400">{nodeMenu.label}</p>
+            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Node</h2>
+
+            <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Title</label>
+            <input
+              value={editLabel}
+              onChange={(e) => setEditLabel(e.target.value)}
+              className="mb-3 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            />
+            {nodeMenu.origin === "manual" ? (
+              <div className="mb-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-zinc-300">Date: {fmtEU(editDate)}</span>
+                  <button onClick={() => setEditDateOpen((v) => !v)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                    {editDateOpen ? "Hide" : "Change"}
+                  </button>
+                </div>
+                {editDateOpen && (
+                  <div className="mt-2">
+                    <MiniCalendar value={editDate} onChange={setEditDate} maxDate={todayIso()} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mb-3 text-xs text-zinc-500">Date comes from the email and isn&apos;t editable here.</p>
+            )}
+            <button onClick={saveNodeEdits} disabled={busy} className={`${primary} mb-5 w-full`}>
+              {busy ? "Saving…" : "Save title / date"}
+            </button>
 
             <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Deadline</p>
             <div className="mb-4">
@@ -1937,6 +2054,89 @@ export default function Timeline({
               <button onClick={removeNode} disabled={busy} className={danger}>
                 {busy ? "Deleting…" : "Delete node"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ambition actions */}
+      {ambMenu && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setAmbMenu(null)}>
+          <div onClick={(e) => e.stopPropagation()} className={card}>
+            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Ambition</h2>
+
+            <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Title</label>
+            <input
+              value={ambEditTitle}
+              onChange={(e) => setAmbEditTitle(e.target.value)}
+              className="mb-3 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            />
+            <div className="mb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-300">Target: {fmtEU(ambEditDate)}</span>
+                <button onClick={() => setAmbEditDateOpen((v) => !v)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                  {ambEditDateOpen ? "Hide" : "Change"}
+                </button>
+              </div>
+              {ambEditDateOpen && (
+                <div className="mt-2">
+                  <MiniCalendar value={ambEditDate} onChange={setAmbEditDate} />
+                </div>
+              )}
+            </div>
+            <label className="mb-4 flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={ambEditDeadline} onChange={(e) => setAmbEditDeadline(e.target.checked)} />
+              Treat as a deadline (red countdown to the date)
+            </label>
+            <button onClick={saveAmbEdits} disabled={busy} className={`${primary} mb-5 w-full`}>
+              {busy ? "Saving…" : "Save changes"}
+            </button>
+
+            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+            <div className="mb-5">
+              {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+              {categories.map((c) => (
+                <div key={c.id} className="mb-2">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                  <div className="flex flex-wrap gap-1">
+                    {c.values.map((v) => {
+                      const cur = ambTagOverride[ambMenu.id] ?? ambMenu.tags;
+                      const on = cur.includes(v.id);
+                      return (
+                        <button
+                          key={v.id}
+                          onClick={() => applyAmbTag(ambMenu.id, v.id, cur)}
+                          className="rounded-full px-2 py-0.5 text-xs"
+                          style={{ background: on ? v.color : "transparent", color: on ? "#fff" : "#d4d4d8", border: `1px solid ${v.color}` }}
+                        >
+                          {v.value}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => {
+                  toggle(ambMenu.id, !ambMenu.done);
+                  setAmbMenu(null);
+                }}
+                disabled={busy}
+                className={ambMenu.done ? ghost : primary}
+              >
+                {ambMenu.done ? "Reopen" : "✓ Mark done"}
+              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setAmbMenu(null)} disabled={busy} className={ghost}>
+                  Close
+                </button>
+                <button onClick={removeAmbition} disabled={busy} className={danger}>
+                  {busy ? "Deleting…" : "Delete"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
