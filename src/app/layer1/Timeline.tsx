@@ -165,6 +165,7 @@ export default function Timeline({
   const scrollTargetT = useRef<number | null>(null);
 
   const [legendOpen, setLegendOpen] = useState(false);
+  const [upcomingOpen, setUpcomingOpen] = useState(false);
   const [daysPerScreen, setDaysPerScreen] = useState(30);
   const [startMs, setStartMs] = useState(nowMs - INITIAL_BACK * DAY);
   const [endMs, setEndMs] = useState(nowMs + INITIAL_FWD * DAY);
@@ -256,6 +257,41 @@ export default function Timeline({
       : daysPerScreen <= 90
       ? { w: 1.5, o: 0.85, mix: 0.4 }
       : { w: 2, o: 1, mix: 1 };
+
+  // ---- "Upcoming": open deadlines + ambitions across every project, soonest first ----
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
+  type Upcoming = {
+    id: string;
+    kind: "deadline" | "ambition";
+    project: string;
+    origin: string;
+    label: string;
+    dueT: number; // for sorting + display
+    goT: number; // where to scroll the calendar
+  };
+  const upcoming: Upcoming[] = [];
+  for (const p of lanes) {
+    for (const a of p.ambitions)
+      if (!a.done)
+        upcoming.push({ id: a.id, kind: "ambition", project: p.name, origin: p.origin, label: a.title, dueT: a.t, goT: a.t });
+    for (const n of p.nodes)
+      if (n.deadline && !n.done)
+        upcoming.push({ id: n.id, kind: "deadline", project: p.name, origin: p.origin, label: n.label, dueT: new Date(n.deadline).getTime(), goT: n.t });
+  }
+  upcoming.sort((a, b) => a.dueT - b.dueT);
+  const overdueCount = upcoming.filter((u) => u.dueT < todayMs).length;
+  const UP_BUCKETS = ["Overdue", "This week", "This month", "Later"] as const;
+  const bucketOf = (t: number) =>
+    t < todayMs ? "Overdue" : t < todayMs + 7 * DAY ? "This week" : t < todayMs + 30 * DAY ? "This month" : "Later";
+  const relLabel = (t: number) => {
+    const d = Math.round((t - todayMs) / DAY);
+    if (d === 0) return "today";
+    if (d === 1) return "tomorrow";
+    if (d === -1) return "yesterday";
+    return d > 0 ? `in ${d} days` : `${-d} days ago`;
+  };
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1138,6 +1174,88 @@ export default function Timeline({
           <button onClick={() => setArmed(null)} className="rounded bg-white/20 px-2 py-0.5 hover:bg-white/30">
             Stop (Esc)
           </button>
+        </div>
+      )}
+
+      {/* Upcoming: what's due soon across all projects */}
+      {!upcomingOpen && (
+        <button
+          onClick={() => setUpcomingOpen(true)}
+          className="absolute right-4 top-3 z-30 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+          title="Upcoming deadlines and ambitions"
+        >
+          Upcoming
+          {upcoming.length > 0 && (
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[11px] ${
+                overdueCount ? "bg-red-600 text-white" : "bg-zinc-700 text-zinc-200"
+              }`}
+            >
+              {overdueCount ? `${overdueCount} overdue` : upcoming.length}
+            </span>
+          )}
+        </button>
+      )}
+      {upcomingOpen && (
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
+            <span className="text-sm font-semibold text-zinc-100">
+              Upcoming{overdueCount > 0 && <span className="ml-2 text-xs font-normal text-red-400">{overdueCount} overdue</span>}
+            </span>
+            <button
+              onClick={() => setUpcomingOpen(false)}
+              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {upcoming.length === 0 ? (
+              <p className="p-3 text-sm text-zinc-500">Nothing scheduled yet. Add an ambition, or set a deadline on a node.</p>
+            ) : (
+              UP_BUCKETS.map((b) => {
+                const items = upcoming.filter((u) => bucketOf(u.dueT) === b);
+                if (items.length === 0) return null;
+                return (
+                  <div key={b} className="mb-3">
+                    <div
+                      className={`mb-1 px-1 text-[10px] font-medium uppercase tracking-wide ${
+                        b === "Overdue" ? "text-red-400" : "text-zinc-500"
+                      }`}
+                    >
+                      {b}
+                    </div>
+                    {items.map((u) => (
+                      <button
+                        key={`${u.kind}-${u.id}`}
+                        onClick={() => jumpToTime(u.goT)}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                        title="Show on the timeline"
+                      >
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-zinc-200">
+                            <span className={u.kind === "deadline" ? "text-red-400" : "text-blue-300"}>
+                              {u.kind === "deadline" ? "⚑ " : "◯ "}
+                            </span>
+                            {u.label}
+                          </span>
+                          <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span className={`block text-[11px] ${u.dueT < todayMs ? "text-red-400" : "text-zinc-400"}`}>
+                            {fmtEU(u.dueT)}
+                          </span>
+                          <span className="block text-[10px] text-zinc-600">{relLabel(u.dueT)}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       )}
 
