@@ -1554,7 +1554,8 @@ export default function Timeline({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") {
+                // Esc closes; Enter on an empty box closes too (toggle back off).
+                if (e.key === "Escape" || (e.key === "Enter" && searchQuery.trim() === "")) {
                   setSearchOpen(false);
                   setSearchQuery("");
                 }
