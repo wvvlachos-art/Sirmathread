@@ -50,10 +50,23 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
       if (v === null || v === "") params.delete(k);
       else params.set(k, v);
     }
-    router.push(`${pathname}?${params.toString()}`);
+    const qs = params.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 
-  // Reset every filter and reveal all projects — archived and spam/low-priority included.
+  // Clear every filter back to the default view (keeps sort/dir).
+  const clearFilters = () =>
+    update({
+      tags: null,
+      hide_completed: null,
+      inactive_only: null,
+      deadline: null,
+      show_archived: null,
+      show_hidden: null,
+    });
+
+  // Reveal absolutely everything, archived + spam/low-priority included (used by the
+  // "N hidden — show all" pill).
   const showEverything = () =>
     update({
       tags: null,
@@ -109,6 +122,9 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
   const selectedTags = (sp.get("tags") ?? "").split(",").filter(Boolean);
   const showHidden = sp.get("show_hidden") === "1";
   const hasHide = categories.some((c) => c.isHide);
+  // Anything that makes the view differ from the clean default.
+  const anyFilter =
+    selectedTags.length > 0 || deadline === "all" || hideCompleted || inactiveOnly || showArchived || showHidden;
 
   const toggleTagParam = (id: string) => {
     const set = new Set(selectedTags);
@@ -177,7 +193,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
   const quickOpts = allOpts
     .filter((o) => (filterCounts[o.id] ?? 0) > 0)
     .sort((a, b) => (filterCounts[b.id] ?? 0) - (filterCounts[a.id] ?? 0))
-    .slice(0, 3);
+    .slice(0, 2);
 
   const selectCls = "rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200";
   const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4";
@@ -235,6 +251,17 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
         <button onClick={() => setFiltersOpen(true)} className={selectCls}>
           Filters{activeOpts.length ? ` (${activeOpts.length})` : ""} ▾
         </button>
+
+        {/* one-click clear, shown whenever the view is filtered */}
+        {anyFilter && (
+          <button
+            onClick={clearFilters}
+            title="Clear all filters"
+            className="rounded-md border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm text-zinc-200 hover:bg-zinc-700"
+          >
+            Clear ✕
+          </button>
+        )}
 
         {/* quick-select: your most-used filters */}
         {quickOpts.length > 0 && (
@@ -314,8 +341,8 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-800 pt-4">
               <button
-                onClick={showEverything}
-                title="Reset every filter and reveal all projects — including archived and spam/low-priority"
+                onClick={clearFilters}
+                title="Clear every filter back to the default view"
                 className="rounded-md border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700"
               >
                 Clear all filters
