@@ -114,7 +114,9 @@ export default async function Layer1Page({
   }
 
   // The full set of the user's real projects — the baseline for the hidden count.
-  const universe = (data ?? []) as DbProject[];
+  // (Cast via unknown: Supabase infers to-one relations like `emails` as arrays,
+  // but at runtime they're single objects, which is what DbProject describes.)
+  const universe = (data ?? []) as unknown as DbProject[];
   let projects = universe;
 
   // Archived projects are hidden unless "Show archived" is on.
