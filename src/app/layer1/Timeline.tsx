@@ -411,6 +411,25 @@ export default function Timeline({
     return () => clearTimeout(h);
   }, [highlight]);
 
+  // Press Enter (when nothing is focused and no menu is open) to open search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || searchOpen) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || el?.isContentEditable) return;
+      if (addTo || addChoice || noteCompose || nodeMenu || ambMenu || projMenu || clusterMenu) return;
+      e.preventDefault();
+      setUpcomingOpen(false);
+      setRecentOpen(false);
+      setTagFindOpen(false);
+      setSearchQuery("");
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, addTo, addChoice, noteCompose, nodeMenu, ambMenu, projMenu, clusterMenu]);
+
   const zoomTo = (d: number) => {
     scrollIntent.current = "today";
     setDaysPerScreen(d);
@@ -1393,22 +1412,9 @@ export default function Timeline({
         </div>
       )}
 
-      {/* Find / Upcoming / Recent / By-tag toggles (lowered so they clear the calendar axis) */}
-      {!upcomingOpen && !recentOpen && !tagFindOpen && !searchOpen && (
+      {/* Upcoming / Recent / By-tag toggles (lowered so they clear the calendar axis) */}
+      {!upcomingOpen && !recentOpen && !tagFindOpen && (
         <div className="absolute right-4 top-14 z-30 flex flex-col items-end gap-2">
-          <button
-            onClick={() => {
-              setUpcomingOpen(false);
-              setRecentOpen(false);
-              setTagFindOpen(false);
-              setSearchQuery("");
-              setSearchOpen(true);
-            }}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
-            title="Search projects and nodes"
-          >
-            Find
-          </button>
           <button
             onClick={() => {
               setRecentOpen(false);
@@ -1522,14 +1528,37 @@ export default function Timeline({
         </div>
       )}
 
-      {/* Find: live search over projects then nodes */}
+      {/* Find button (top-left, under Arrange) — Enter also opens it */}
+      {!searchOpen && (
+        <button
+          onClick={() => {
+            setUpcomingOpen(false);
+            setRecentOpen(false);
+            setTagFindOpen(false);
+            setSearchQuery("");
+            setSearchOpen(true);
+          }}
+          className="absolute left-3 top-2 z-30 flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+          title="Search projects and nodes (press Enter)"
+        >
+          🔍 Find
+        </button>
+      )}
+
+      {/* Find: live search over projects then nodes — a popover at top-left, under Arrange */}
       {searchOpen && (
-        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
-          <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2">
+        <div className="absolute left-3 top-2 z-40 w-72 rounded-lg border border-zinc-700 bg-zinc-950/95 shadow-xl backdrop-blur">
+          <div className="flex items-center gap-2 border-b border-zinc-800 px-2 py-1.5">
             <input
               autoFocus
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  setSearchQuery("");
+                }
+              }}
               placeholder="Search projects & nodes…"
               className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-zinc-500"
             />
@@ -1539,12 +1568,12 @@ export default function Timeline({
                 setSearchQuery("");
               }}
               className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-              title="Close"
+              title="Close (Esc)"
             >
               ✕
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-2">
+          <div className="max-h-[60vh] overflow-auto p-2">
             {searchQuery.trim().length < 2 ? (
               <p className="px-1 pt-1 text-xs text-zinc-500">Type at least 2 letters…</p>
             ) : (
