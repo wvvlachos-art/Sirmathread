@@ -163,12 +163,15 @@ export default function Timeline({
   const anchored = useRef(false);
   const scrollIntent = useRef<"today" | "left" | "right" | null>(null);
   const scrollTargetT = useRef<number | null>(null);
+  const scrollTargetTop = useRef<number | null>(null);
 
   const [legendOpen, setLegendOpen] = useState(false);
   const [upcomingOpen, setUpcomingOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
   const [tagFindOpen, setTagFindOpen] = useState(false);
   const [tagFindId, setTagFindId] = useState<string | null>(null);
+  // A node/ambition briefly spotlit after jumping to it from a panel.
+  const [highlight, setHighlight] = useState<{ id: string; key: number } | null>(null);
   const [daysPerScreen, setDaysPerScreen] = useState(30);
   const [startMs, setStartMs] = useState(nowMs - INITIAL_BACK * DAY);
   const [endMs, setEndMs] = useState(nowMs + INITIAL_FWD * DAY);
@@ -273,16 +276,17 @@ export default function Timeline({
     label: string;
     dueT: number; // for sorting + display
     goT: number; // where to scroll the calendar
+    lane: number; // which row
   };
   const upcoming: Upcoming[] = [];
-  for (const p of lanes) {
+  lanes.forEach((p, li) => {
     for (const a of p.ambitions)
       if (!a.done)
-        upcoming.push({ id: a.id, kind: "ambition", project: p.name, origin: p.origin, label: a.title, dueT: a.t, goT: a.t });
+        upcoming.push({ id: a.id, kind: "ambition", project: p.name, origin: p.origin, label: a.title, dueT: a.t, goT: a.t, lane: li });
     for (const n of p.nodes)
       if (n.deadline && !n.done)
-        upcoming.push({ id: n.id, kind: "deadline", project: p.name, origin: p.origin, label: n.label, dueT: new Date(n.deadline).getTime(), goT: n.t });
-  }
+        upcoming.push({ id: n.id, kind: "deadline", project: p.name, origin: p.origin, label: n.label, dueT: new Date(n.deadline).getTime(), goT: n.t, lane: li });
+  });
   upcoming.sort((a, b) => a.dueT - b.dueT);
   const overdueCount = upcoming.filter((u) => u.dueT < todayMs).length;
   const UP_BUCKETS = ["Overdue", "This week", "This month", "Later"] as const;
@@ -298,12 +302,13 @@ export default function Timeline({
 
   // ---- "Recent": nodes from the last 7 days, across every project, newest first ----
   const recentCutoff = todayMs - 7 * DAY;
-  type Recent = { id: string; project: string; origin: string; label: string; t: number; done: boolean };
+  type Recent = { id: string; project: string; origin: string; label: string; t: number; done: boolean; lane: number };
   const recent: Recent[] = [];
-  for (const p of lanes)
+  lanes.forEach((p, li) => {
     for (const n of p.nodes)
       if (n.t >= recentCutoff && n.t <= todayMs + DAY)
-        recent.push({ id: n.id, project: p.name, origin: p.origin, label: n.label, t: n.t, done: n.done });
+        recent.push({ id: n.id, project: p.name, origin: p.origin, label: n.label, t: n.t, done: n.done, lane: li });
+  });
   recent.sort((a, b) => b.t - a.t);
 
   useEffect(() => {
@@ -332,7 +337,9 @@ export default function Timeline({
     // A pending "jump to this date" (e.g. a project's first node) wins.
     if (scrollTargetT.current != null) {
       el.scrollLeft = Math.max(0, LABEL_W + xFor(scrollTargetT.current) - vw / 2);
+      if (scrollTargetTop.current != null) el.scrollTop = scrollTargetTop.current;
       scrollTargetT.current = null;
+      scrollTargetTop.current = null;
       return;
     }
     if (!scrollIntent.current) return;
@@ -343,20 +350,39 @@ export default function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startMs, endMs, pxPerDay]);
 
-  // Centre the calendar on a given date, expanding the loaded range back/forward
-  // if that date isn't currently in view.
-  const jumpToTime = (t: number) => {
+  // Scroll position that centres a lane (row) vertically, allowing for the
+  // sticky axis that covers the top AXIS_H of the viewport.
+  const laneTopFor = (idx: number) => Math.max(0, idx * laneH + laneH / 2 - (vh - AXIS_H) / 2);
+
+  // Centre the calendar on a date — and, if a lane index is given, on that row
+  // too — expanding the loaded range back/forward if the date isn't in view.
+  const jumpToTime = (t: number, laneIdx?: number) => {
+    const top = laneIdx != null ? laneTopFor(laneIdx) : null;
     const margin = 14 * DAY;
     if (t - margin < startMs) {
       scrollTargetT.current = t;
+      scrollTargetTop.current = top;
       setStartMs(Math.max(nowMs - MAX_SPAN_DAYS * DAY, t - margin));
     } else if (t + margin > endMs) {
       scrollTargetT.current = t;
+      scrollTargetTop.current = top;
       setEndMs(Math.min(nowMs + MAX_SPAN_DAYS * DAY, t + margin));
     } else {
-      scrollRef.current?.scrollTo({ left: Math.max(0, LABEL_W + xFor(t) - vw / 2), behavior: "smooth" });
+      const el = scrollRef.current;
+      if (el) el.scrollTo({ left: Math.max(0, LABEL_W + xFor(t) - vw / 2), top: top ?? el.scrollTop, behavior: "smooth" });
     }
   };
+
+  // Jump to an item and briefly spotlight it (dim the rest).
+  const focusOn = (id: string, t: number, laneIdx: number) => {
+    setHighlight((h) => ({ id, key: (h?.key ?? 0) + 1 }));
+    jumpToTime(t, laneIdx);
+  };
+  useEffect(() => {
+    if (!highlight) return;
+    const h = setTimeout(() => setHighlight(null), 2600);
+    return () => clearTimeout(h);
+  }, [highlight]);
 
   const zoomTo = (d: number) => {
     scrollIntent.current = "today";
@@ -802,8 +828,22 @@ export default function Timeline({
                           (!selectedTags.length || ntags.some((t) => selectedTags.includes(t))) &&
                           (!deadlineActive || !!n.deadline);
                         const dim = n.done || (filterActive && !matchesFilter);
+                        const isHi = highlight?.id === n.id;
+                        const opacity = highlight ? (isHi ? 1 : 0.2) : dim ? 0.4 : 1;
                         return (
-                          <g key={n.id} className="cursor-pointer" opacity={dim ? 0.4 : 1} onClick={() => openNode(n)}>
+                          <g key={n.id} className="cursor-pointer" opacity={opacity} onClick={() => openNode(n)}>
+                            {isHi && (
+                              <rect
+                                x={left - 3}
+                                y={top - 3}
+                                width={nodeSize + 6}
+                                height={nodeSize + 6}
+                                rx={13}
+                                fill="none"
+                                stroke="#fde68a"
+                                strokeWidth={2.5}
+                              />
+                            )}
                             <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
                               <rect width={NODE} height={NODE} rx={10} ry={10} fill={n.done ? "#6b7280" : colorFor(n.origin)} />
                               {!n.done && n.stage > 0 && (
@@ -846,8 +886,9 @@ export default function Timeline({
                       const allDone = doneCount === cl.length;
                       const anyDeadline = cl.some((n) => n.deadline && !n.done);
                       const rowH = 14;
+                      const hiInCluster = !!highlight && cl.some((n) => n.id === highlight.id);
                       return (
-                        <g key={`cl-${cl[0].id}`}>
+                        <g key={`cl-${cl[0].id}`} opacity={highlight ? (hiInCluster ? 1 : 0.2) : 1}>
                           {/* each member's title, fanned up/down with a leader to its exact spot */}
                           {cl.map((n, k) => {
                             const mx = xFor(n.t);
@@ -897,6 +938,9 @@ export default function Timeline({
                                   })
                             }
                           >
+                            {hiInCluster && (
+                              <rect x={left - 3} y={top - 3} width={nodeSize + 6} height={nodeSize + 6} rx={13} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                            )}
                             <rect x={left} y={top} width={nodeSize} height={nodeSize} rx={10} ry={10} fill={allDone ? "#6b7280" : colorFor(p.origin)} stroke="#0a0a0a" strokeWidth={1.5} />
                             <text x={cxC} y={centerY + 6} fill={allDone ? "#d4d4d8" : "#fff"} fontSize={17} fontWeight={700} textAnchor="middle">
                               {cl.length}
@@ -916,8 +960,17 @@ export default function Timeline({
                       if (cl.length === 1) {
                         const a = cl[0];
                         const cx = xFor(a.t);
+                        const isHi = highlight?.id === a.id;
                         return (
-                          <g key={a.id} className="cursor-pointer" onClick={() => toggle(a.id, !a.done)}>
+                          <g
+                            key={a.id}
+                            className="cursor-pointer"
+                            opacity={highlight ? (isHi ? 1 : 0.2) : 1}
+                            onClick={() => toggle(a.id, !a.done)}
+                          >
+                            {isHi && (
+                              <circle cx={cx} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                            )}
                             <circle
                               cx={cx}
                               cy={centerY}
@@ -961,8 +1014,9 @@ export default function Timeline({
                       const allDone = doneCount === cl.length;
                       const anyDue = cl.some((a) => a.isDeadline && !a.done);
                       const rowH = 14;
+                      const hiInCluster = !!highlight && cl.some((a) => a.id === highlight.id);
                       return (
-                        <g key={`acl-${cl[0].id}`}>
+                        <g key={`acl-${cl[0].id}`} opacity={highlight ? (hiInCluster ? 1 : 0.2) : 1}>
                           {cl.map((a, k) => {
                             const mx = xFor(a.t);
                             const up = k % 2 === 0;
@@ -1001,6 +1055,9 @@ export default function Timeline({
                               })
                             }
                           >
+                            {hiInCluster && (
+                              <circle cx={cxC} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                            )}
                             <circle
                               cx={cxC}
                               cy={centerY}
@@ -1273,7 +1330,7 @@ export default function Timeline({
                     {items.map((u) => (
                       <button
                         key={`${u.kind}-${u.id}`}
-                        onClick={() => jumpToTime(u.goT)}
+                        onClick={() => focusOn(u.id, u.goT, u.lane)}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
                         title="Show on the timeline"
                       >
@@ -1325,7 +1382,7 @@ export default function Timeline({
               recent.map((u) => (
                 <button
                   key={u.id}
-                  onClick={() => jumpToTime(u.t)}
+                  onClick={() => focusOn(u.id, u.t, u.lane)}
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
                   title="Show on the timeline"
                 >
@@ -1391,11 +1448,12 @@ export default function Timeline({
                 const tagVal = categories.flatMap((c) => c.values).find((v) => v.id === tagFindId);
                 const tagName = tagVal?.value ?? "tag";
                 const tagColor = tagVal?.color ?? tagColors[tagFindId] ?? "#a1a1aa";
-                const matches: { id: string; label: string; t: number; done: boolean; project: string; origin: string }[] = [];
-                for (const p of lanes)
+                const matches: { id: string; label: string; t: number; done: boolean; project: string; origin: string; lane: number }[] = [];
+                lanes.forEach((p, li) => {
                   for (const n of p.nodes)
                     if (nodeTagsOf(n).includes(tagFindId))
-                      matches.push({ id: n.id, label: n.label, t: n.t, done: n.done, project: p.name, origin: p.origin });
+                      matches.push({ id: n.id, label: n.label, t: n.t, done: n.done, project: p.name, origin: p.origin, lane: li });
+                });
                 matches.sort((a, b) => b.t - a.t);
                 return (
                   <>
@@ -1413,7 +1471,7 @@ export default function Timeline({
                       matches.map((u) => (
                         <button
                           key={u.id}
-                          onClick={() => jumpToTime(u.t)}
+                          onClick={() => focusOn(u.id, u.t, u.lane)}
                           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
                           title="Show on the timeline"
                         >
