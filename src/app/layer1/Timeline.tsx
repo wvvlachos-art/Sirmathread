@@ -179,6 +179,8 @@ export default function Timeline({
   const [recentOpen, setRecentOpen] = useState(false);
   const [tagFindOpen, setTagFindOpen] = useState(false);
   const [tagFindId, setTagFindId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   // A node/ambition briefly spotlit after jumping to it from a panel.
   const [highlight, setHighlight] = useState<{ id: string; key: number } | null>(null);
   const [daysPerScreen, setDaysPerScreen] = useState(30);
@@ -1391,13 +1393,27 @@ export default function Timeline({
         </div>
       )}
 
-      {/* Upcoming / Recent / By-tag toggles (lowered so they clear the calendar axis) */}
-      {!upcomingOpen && !recentOpen && !tagFindOpen && (
+      {/* Find / Upcoming / Recent / By-tag toggles (lowered so they clear the calendar axis) */}
+      {!upcomingOpen && !recentOpen && !tagFindOpen && !searchOpen && (
         <div className="absolute right-4 top-14 z-30 flex flex-col items-end gap-2">
+          <button
+            onClick={() => {
+              setUpcomingOpen(false);
+              setRecentOpen(false);
+              setTagFindOpen(false);
+              setSearchQuery("");
+              setSearchOpen(true);
+            }}
+            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+            title="Search projects and nodes"
+          >
+            Find
+          </button>
           <button
             onClick={() => {
               setRecentOpen(false);
               setTagFindOpen(false);
+              setSearchOpen(false);
               setUpcomingOpen(true);
             }}
             className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
@@ -1418,6 +1434,7 @@ export default function Timeline({
             onClick={() => {
               setUpcomingOpen(false);
               setTagFindOpen(false);
+              setSearchOpen(false);
               setRecentOpen(true);
             }}
             className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
@@ -1432,6 +1449,7 @@ export default function Timeline({
             onClick={() => {
               setUpcomingOpen(false);
               setRecentOpen(false);
+              setSearchOpen(false);
               setTagFindOpen(true);
             }}
             className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
@@ -1499,6 +1517,93 @@ export default function Timeline({
                   </div>
                 );
               })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Find: live search over projects then nodes */}
+      {searchOpen && (
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
+          <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2">
+            <input
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search projects & nodes…"
+              className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            />
+            <button
+              onClick={() => {
+                setSearchOpen(false);
+                setSearchQuery("");
+              }}
+              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {searchQuery.trim().length < 2 ? (
+              <p className="px-1 pt-1 text-xs text-zinc-500">Type at least 2 letters…</p>
+            ) : (
+              (() => {
+                const q = searchQuery.trim().toLowerCase();
+                const projHits: { lane: number; p: Lane }[] = [];
+                const nodeHits: { id: string; label: string; t: number; origin: string; project: string; lane: number; done: boolean }[] = [];
+                lanes.forEach((p, li) => {
+                  if (p.name.toLowerCase().includes(q)) projHits.push({ lane: li, p });
+                  for (const n of p.nodes)
+                    if (n.label.toLowerCase().includes(q))
+                      nodeHits.push({ id: n.id, label: n.label, t: n.t, origin: n.origin, project: p.name, lane: li, done: n.done });
+                });
+                nodeHits.sort((a, b) => b.t - a.t);
+                if (projHits.length === 0 && nodeHits.length === 0)
+                  return <p className="px-1 pt-1 text-sm text-zinc-500">No matches.</p>;
+                return (
+                  <>
+                    {projHits.length > 0 && (
+                      <div className="mb-3">
+                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">Projects</div>
+                        {projHits.map(({ p, lane }) => (
+                          <button
+                            key={p.id}
+                            onClick={() => jumpToTime(p.nodes[0]?.t ?? nowMs, lane)}
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                            title="Go to this project"
+                          >
+                            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: projColorOf(p) }} />
+                            <span className="truncate text-sm text-zinc-200">{p.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {nodeHits.length > 0 && (
+                      <div>
+                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">Nodes</div>
+                        {nodeHits.slice(0, 60).map((u) => (
+                          <button
+                            key={u.id}
+                            onClick={() => focusOn(u.id, u.t, u.lane)}
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                            title="Show on the timeline"
+                          >
+                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                            <span className="min-w-0 flex-1">
+                              <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
+                                {u.label}
+                              </span>
+                              <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                            </span>
+                            <span className="shrink-0 text-[11px] text-zinc-500">{fmtEU(u.t)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()
             )}
           </div>
         </div>
