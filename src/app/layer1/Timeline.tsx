@@ -1040,18 +1040,24 @@ export default function Timeline({
                               </text>
                             )}
                             {!a.done &&
-                              atags.map((tid, di) => (
-                                <circle
-                                  key={tid}
-                                  className="tag-pop"
-                                  cx={cx - ((atags.length - 1) * 7) / 2 + di * 7}
-                                  cy={centerY + AMB_R - 8}
-                                  r={2.6}
-                                  fill={tagColors[tid] ?? "#a1a1aa"}
-                                  stroke="#00000066"
-                                  strokeWidth={0.75}
-                                />
-                              ))}
+                              (() => {
+                                // Same pip size + layout as the node boxes, pulled in
+                                // slightly (×0.82) so they sit inside the round shape.
+                                const pos = pipPositions(atags.length);
+                                const f = 0.82;
+                                return atags.map((tid, di) => (
+                                  <circle
+                                    key={tid}
+                                    className="tag-pop"
+                                    cx={cx + (pos[di].x - NODE / 2) * f}
+                                    cy={centerY + (pos[di].y - NODE / 2) * f}
+                                    r={pos[di].r}
+                                    fill={tagColors[tid] ?? "#a1a1aa"}
+                                    stroke="#00000066"
+                                    strokeWidth={0.75}
+                                  />
+                                ));
+                              })()}
                             <title>
                               Ambition: {a.title} — target {fmtEU(a.t)}
                               {a.done ? " (done — click to reopen)" : " (click to mark done)"}
