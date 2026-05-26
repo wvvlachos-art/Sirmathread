@@ -164,6 +164,7 @@ export default function Timeline({
   const scrollIntent = useRef<"today" | "left" | "right" | null>(null);
   const scrollTargetT = useRef<number | null>(null);
 
+  const [legendOpen, setLegendOpen] = useState(false);
   const [daysPerScreen, setDaysPerScreen] = useState(30);
   const [startMs, setStartMs] = useState(nowMs - INITIAL_BACK * DAY);
   const [endMs, setEndMs] = useState(nowMs + INITIAL_FWD * DAY);
@@ -1136,6 +1137,90 @@ export default function Timeline({
           </button>
         </div>
       )}
+
+      {/* Legend / key (toggleable, bottom-left — offset right to clear the deploy badge) */}
+      <div className="absolute bottom-6 left-20 z-30 flex flex-col items-start gap-2">
+        {legendOpen && (
+          <div className="w-64 rounded-lg border border-zinc-800 bg-zinc-950/90 p-3 text-xs text-zinc-300 shadow-xl backdrop-blur">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-zinc-500">Key</div>
+            <ul className="flex flex-col gap-2">
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} />
+                </svg>
+                <span>Event from Gmail</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="1" y="1" width="16" height="16" rx="4" fill={MANUAL_COLOR} />
+                </svg>
+                <span>Event you added</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="1" y="1" width="16" height="16" rx="4" fill="#6b7280" />
+                </svg>
+                <span>Done</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} />
+                  <rect x="1" y="1" width="6" height="16" rx="4" fill="#ef4444" />
+                </svg>
+                <span>Deadline — fills red as it nears</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <circle cx="9" cy="9" r="7" fill="none" stroke="#e4e4e7" strokeWidth="1.5" strokeDasharray="3 2" />
+                </svg>
+                <span>Ambition (future) — click to tick off</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} stroke="#0a0a0a" strokeWidth="1.5" />
+                  <text x="9" y="13" fill="#fff" fontSize="11" fontWeight="700" textAnchor="middle">
+                    3
+                  </text>
+                </svg>
+                <span>Several items bunched — hover to peek, click for list</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <circle cx="6" cy="9" r="3.5" fill="#ef4444" />
+                  <circle cx="15" cy="9" r="3.5" fill="#22c55e" />
+                </svg>
+                <span>Corner dots: deadline inside / some done</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <line x1="1" y1="6" x2="19" y2="6" stroke="#3f3f46" strokeWidth="1" />
+                  <line x1="1" y1="13" x2="19" y2="13" stroke={GMAIL_COLOR} strokeWidth="2.5" />
+                </svg>
+                <span>Wire thickens &amp; colours as you zoom out</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" aria-hidden>
+                  <rect x="2" y="3" width="16" height="12" rx="2" fill="#fef08a" stroke="#d97706" />
+                </svg>
+                <span>Note — drag to move, click to edit</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <svg width="20" height="18" viewBox="0 0 24 24" aria-hidden>
+                  <rect x="5" y="5" width="2.4" height="14" rx="1" fill="#a1a1aa" />
+                  <path d="M20 5 L9 12 L20 19 Z" fill="#a1a1aa" />
+                </svg>
+                <span>Jump to a project&apos;s start</span>
+              </li>
+            </ul>
+          </div>
+        )}
+        <button
+          onClick={() => setLegendOpen((v) => !v)}
+          className="rounded-lg border border-zinc-800 bg-zinc-950/80 px-2.5 py-1 text-sm text-zinc-200 backdrop-blur hover:bg-zinc-800"
+        >
+          {legendOpen ? "Hide key" : "Key"}
+        </button>
+      </div>
 
       {/* Floating controls */}
       <div className="absolute bottom-6 right-4 flex flex-col items-end gap-2">
