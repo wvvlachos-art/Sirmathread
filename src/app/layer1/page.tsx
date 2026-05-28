@@ -19,7 +19,7 @@ type DbNode = {
   origin: string;
   node_date: string | null;
   emails: DbEmail | null;
-  node_tag_values: { tag_value_id: string }[];
+  node_tag_values: { tag_value_id: string; position: number }[];
 };
 type DbTagValue = { id: string; value: string; color: string | null };
 type DbCategory = {
@@ -100,7 +100,7 @@ export default async function Layer1Page({
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, display_name, gmail_label_name, origin, color, spine_color, spine_color_is_user_set, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
+      "id, display_name, gmail_label_name, origin, color, spine_color, spine_color_is_user_set, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id, position)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
     )
     .in("state", ["active", "archived"]);
 
@@ -239,7 +239,9 @@ export default async function Layer1Page({
           done: n.done,
           deadline: n.deadline,
           origin: n.origin === "manual" ? "manual" : "gmail",
-          tags: (n.node_tag_values ?? []).map((t) => t.tag_value_id),
+          tags: [...(n.node_tag_values ?? [])]
+            .sort((a, b) => a.position - b.position)
+            .map((t) => t.tag_value_id),
         };
       })
       .sort((a, b) => a.t - b.t);

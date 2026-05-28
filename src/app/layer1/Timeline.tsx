@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createAmbition,
   createManualNode,
@@ -47,7 +46,18 @@ import {
   ATTENTION_ALERT,
   ATTENTION_NORMAL,
   ATTENTION_INACTIVE,
+  darken,
 } from "@/lib/theme";
+
+// Tag-bar geometry (the thin colour bars beneath a multi-tagged node).
+const BAR_H = 3;
+const BAR_GAP = 3;
+const BAR_WIDTH_FACTOR = 0.78; // fraction of nodeSize
+const BAR_RX = 1.5;
+// Bars only render when nodes are at full size. At wider zooms (3m, 6m) the
+// node shrinks toward a dot and there's no room — tags surface via the tag
+// lens at those zooms (separate feature).
+const BARS_VISIBLE_MAX_DAYS = 30;
 
 type TagCat = {
   id: string;
@@ -334,7 +344,7 @@ function layoutLaneLabels(
 }
 
 export default function Timeline({
-  lanes,
+  lanes: lanesProp,
   nowMs,
   tagColors,
   categories,
@@ -349,8 +359,60 @@ export default function Timeline({
   deadlineActive: boolean;
 }) {
   const filterActive = selectedTags.length > 0 || deadlineActive;
-  const router = useRouter();
   const { armed, setArmed } = useWand();
+
+  // The canvas owns its data after the initial server snapshot. Mutations
+  // (add node, tag toggle, delete, ...) update this local state directly,
+  // so we never re-fetch the whole project list on every click. Resyncs only
+  // when the parent re-renders with a genuinely new snapshot — i.e. when the
+  // URL filter/sort changes, page.tsx re-runs and hands us a new lanesProp.
+  const [lanes, setLanes] = useState<Lane[]>(lanesProp);
+  useEffect(() => {
+    setLanes(lanesProp);
+  }, [lanesProp]);
+
+  // ---- Mutation helpers (replace what router.refresh() used to do) ----
+  const patchLane = (laneId: string, fn: (l: Lane) => Lane) =>
+    setLanes((prev) => prev.map((l) => (l.id === laneId ? fn(l) : l)));
+  const removeLaneById = (laneId: string) =>
+    setLanes((prev) => prev.filter((l) => l.id !== laneId));
+  const addNodeToLane = (laneId: string, node: LaneNode) =>
+    patchLane(laneId, (l) => ({
+      ...l,
+      nodes: [...l.nodes, node].sort((a, b) => a.t - b.t),
+      lastActivityAt: new Date().toISOString(),
+    }));
+  const updateNodeIn = (laneId: string, nodeId: string, patch: Partial<LaneNode>) =>
+    patchLane(laneId, (l) => ({
+      ...l,
+      nodes: l.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
+    }));
+  const removeNodeFromLane = (laneId: string, nodeId: string) =>
+    patchLane(laneId, (l) => ({ ...l, nodes: l.nodes.filter((n) => n.id !== nodeId) }));
+  const addAmbitionToLane = (laneId: string, amb: Ambition) =>
+    patchLane(laneId, (l) => ({ ...l, ambitions: [...l.ambitions, amb] }));
+  const updateAmbitionIn = (laneId: string, ambId: string, patch: Partial<Ambition>) =>
+    patchLane(laneId, (l) => ({
+      ...l,
+      ambitions: l.ambitions.map((a) => (a.id === ambId ? { ...a, ...patch } : a)),
+    }));
+  const removeAmbitionFromLane = (laneId: string, ambId: string) =>
+    patchLane(laneId, (l) => ({ ...l, ambitions: l.ambitions.filter((a) => a.id !== ambId) }));
+  const addNoteToLane = (laneId: string, note: Note) =>
+    patchLane(laneId, (l) => ({ ...l, notes: [...l.notes, note] }));
+  const updateNoteIn = (laneId: string, noteId: string, patch: Partial<Note>) =>
+    patchLane(laneId, (l) => ({
+      ...l,
+      notes: l.notes.map((n) => (n.id === noteId ? { ...n, ...patch } : n)),
+    }));
+  const removeNoteFromLane = (laneId: string, noteId: string) =>
+    patchLane(laneId, (l) => ({ ...l, notes: l.notes.filter((n) => n.id !== noteId) }));
+  const laneOfNode = (nodeId: string) =>
+    lanes.find((l) => l.nodes.some((n) => n.id === nodeId)) ?? null;
+  const laneOfAmbition = (ambId: string) =>
+    lanes.find((l) => l.ambitions.some((a) => a.id === ambId)) ?? null;
+  const laneOfNote = (noteId: string) =>
+    lanes.find((l) => l.notes.some((n) => n.id === noteId)) ?? null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchored = useRef(false);
   const scrollIntent = useRef<"today" | "left" | "right" | null>(null);
@@ -448,12 +510,6 @@ export default function Timeline({
     } | null
   >(null);
   const [projConfirm, setProjConfirm] = useState(false);
-  // Optimistic overrides so dots/colours change instantly (no refetch).
-  const [nodeTagOverride, setNodeTagOverride] = useState<Record<string, string[]>>({});
-  const [projTagOverride, setProjTagOverride] = useState<Record<string, string[]>>({});
-  const [ambTagOverride, setAmbTagOverride] = useState<Record<string, string[]>>({});
-  const [projColorOverride, setProjColorOverride] = useState<Record<string, string | null>>({});
-  const [spineColorOverride, setSpineColorOverride] = useState<Record<string, { color: string | null; userSet: boolean }>>({});
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -465,6 +521,17 @@ export default function Timeline({
   // A gentle shrink on the zoomed-out spans; the real declutter is the clustering below.
   const nodeSize = daysPerScreen <= 30 ? NODE : daysPerScreen <= 90 ? 40 : 32;
   const nodeScale = nodeSize / NODE;
+
+  // Cluster + label layout per lane. Memoized: only recomputes when the lane's
+  // nodes change, the zoom changes, or the time origin changes. Previously this
+  // ran ~150 times per render (every lane, every render) — the single biggest
+  // per-frame cost identified in the perf audit.
+  const laneLayouts = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof layoutLaneLabels>>();
+    const x = (t: number) => ((t - startMs) / DAY) * pxPerDay;
+    for (const l of lanes) m.set(l.id, layoutLaneLabels(l.nodes, x, nodeSize));
+    return m;
+  }, [lanes, startMs, pxPerDay, nodeSize]);
 
   // Wire thickness grows with the span; default colour stays a constant
   // oxblood-at-45%. A per-project custom colour overrides the default and
@@ -651,17 +718,45 @@ export default function Timeline({
         ? await createAmbition(addTo.projectId, addTitle, addDate, addAsDeadline)
         : await createManualNode(addTo.projectId, addTitle, addDate);
     setBusy(false);
-    if (res.error) {
-      alert("Could not add: " + res.error);
+    if (res.error || !res.id) {
+      alert("Could not add: " + (res.error ?? "unknown error"));
       return;
     }
+    if (addTo.mode === "ambition") {
+      addAmbitionToLane(addTo.projectId, {
+        id: res.id,
+        title: addTitle.trim(),
+        t: new Date(addDate).getTime(),
+        done: false,
+        isDeadline: addAsDeadline,
+        stage: 0,
+        tags: [],
+      });
+    } else {
+      addNodeToLane(addTo.projectId, {
+        id: res.id,
+        label: addTitle.trim(),
+        t: new Date(`${addDate}T09:00:00Z`).getTime(),
+        stage: 0,
+        done: false,
+        deadline: null,
+        origin: "manual",
+        tags: [],
+      });
+    }
     setAddTo(null);
-    router.refresh();
   };
 
   const toggle = async (id: string, done: boolean) => {
-    await toggleAmbition(id, done);
-    router.refresh();
+    const lane = laneOfAmbition(id);
+    if (!lane) return;
+    const prev = lane.ambitions.find((a) => a.id === id)?.done ?? false;
+    updateAmbitionIn(lane.id, id, { done });
+    const res = await toggleAmbition(id, done);
+    if (res?.error) {
+      updateAmbitionIn(lane.id, id, { done: prev });
+      alert("Could not update: " + res.error);
+    }
   };
   // Open a node: stamp it if the wand is armed, otherwise show its menu.
   const openNode = (n: LaneNode) => {
@@ -691,8 +786,14 @@ export default function Timeline({
       alert(res.error);
       return;
     }
+    const lane = laneOfNode(nodeMenu.id);
+    if (lane) {
+      const patch: Partial<LaneNode> = {};
+      if (fields.label) patch.label = fields.label.trim();
+      if (fields.date) patch.t = new Date(`${fields.date}T09:00:00Z`).getTime();
+      updateNodeIn(lane.id, nodeMenu.id, patch);
+    }
     setNodeMenu(null);
-    router.refresh();
   };
 
   // Open an ambition: stamp it if armed, otherwise show its menu.
@@ -724,24 +825,41 @@ export default function Timeline({
       alert(res.error);
       return;
     }
+    const lane = laneOfAmbition(ambMenu.id);
+    if (lane) {
+      const patch: Partial<Ambition> = {};
+      if (fields.title) patch.title = fields.title.trim();
+      if (fields.targetDate) patch.t = new Date(fields.targetDate).getTime();
+      if (fields.isDeadline !== undefined) patch.isDeadline = fields.isDeadline;
+      updateAmbitionIn(lane.id, ambMenu.id, patch);
+    }
     setAmbMenu(null);
-    router.refresh();
   };
   const removeAmbition = async () => {
     if (!ambMenu) return;
+    const lane = laneOfAmbition(ambMenu.id);
     setBusy(true);
-    await deleteAmbition(ambMenu.id);
+    const res = await deleteAmbition(ambMenu.id);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not delete: " + res.error);
+      return;
+    }
+    if (lane) removeAmbitionFromLane(lane.id, ambMenu.id);
     setAmbMenu(null);
-    router.refresh();
   };
   const removeNode = async () => {
     if (!nodeMenu) return;
+    const lane = laneOfNode(nodeMenu.id);
     setBusy(true);
-    await deleteNode(nodeMenu.id);
+    const res = await deleteNode(nodeMenu.id);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not delete: " + res.error);
+      return;
+    }
+    if (lane) removeNodeFromLane(lane.id, nodeMenu.id);
     setNodeMenu(null);
-    router.refresh();
   };
   const saveNodeDeadline = async () => {
     if (!nodeMenu) return;
@@ -752,25 +870,39 @@ export default function Timeline({
       alert(res.error);
       return;
     }
+    const lane = laneOfNode(nodeMenu.id);
+    if (lane) {
+      // Stage starts at 0 because deadline_set_at = now: no time has elapsed.
+      updateNodeIn(lane.id, nodeMenu.id, { deadline: nodeCalDate, done: false, stage: 0 });
+    }
     setNodeMenu(null);
     setNodeCalOpen(false);
-    router.refresh();
   };
   const removeNodeDeadline = async () => {
     if (!nodeMenu) return;
+    const lane = laneOfNode(nodeMenu.id);
     setBusy(true);
-    await clearNodeDeadline(nodeMenu.id);
+    const res = await clearNodeDeadline(nodeMenu.id);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not clear: " + res.error);
+      return;
+    }
+    if (lane) updateNodeIn(lane.id, nodeMenu.id, { deadline: null, done: false, stage: 0 });
     setNodeMenu(null);
-    router.refresh();
   };
   const completeNode = async (done: boolean) => {
     if (!nodeMenu) return;
+    const lane = laneOfNode(nodeMenu.id);
     setBusy(true);
-    await setNodeDone(nodeMenu.id, done);
+    const res = await setNodeDone(nodeMenu.id, done);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not update: " + res.error);
+      return;
+    }
+    if (lane) updateNodeIn(lane.id, nodeMenu.id, { done });
     setNodeMenu(null);
-    router.refresh();
   };
 
   const noteOf = (nt: Note) => noteOverride[nt.id] ?? { x: nt.x, y: nt.y };
@@ -779,38 +911,62 @@ export default function Timeline({
     setBusy(true);
     const res = await createNote(noteCompose.projectId, noteCompose.anchorNodeId, noteBody, noteCompose.anchorT, -60);
     setBusy(false);
-    if (res.error) {
-      alert(res.error);
+    if (res.error || !res.id) {
+      alert("Could not add: " + (res.error ?? "unknown error"));
       return;
     }
+    addNoteToLane(noteCompose.projectId, {
+      id: res.id,
+      body: noteBody,
+      x: noteCompose.anchorT,
+      y: -60,
+      anchorT: noteCompose.anchorT,
+    });
     setNoteCompose(null);
     setNoteBody("");
-    router.refresh();
   };
   const saveNoteBody = async (id: string) => {
     setEditingNote(null);
-    await updateNoteBody(id, editBody);
-    router.refresh();
+    const lane = laneOfNote(id);
+    const prevBody = lane?.notes.find((n) => n.id === id)?.body ?? "";
+    if (lane) updateNoteIn(lane.id, id, { body: editBody });
+    const res = await updateNoteBody(id, editBody);
+    if (res?.error) {
+      if (lane) updateNoteIn(lane.id, id, { body: prevBody });
+      alert("Could not save: " + res.error);
+    }
   };
   const removeNoteById = async (id: string) => {
-    await deleteNote(id);
-    router.refresh();
+    const lane = laneOfNote(id);
+    if (lane) removeNoteFromLane(lane.id, id);
+    const res = await deleteNote(id);
+    if (res?.error) alert("Could not delete: " + res.error);
   };
   const doArchive = async () => {
     if (!projMenu) return;
+    const id = projMenu.id;
     setBusy(true);
-    await archiveProject(projMenu.id);
+    const res = await archiveProject(id);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not archive: " + res.error);
+      return;
+    }
+    patchLane(id, (l) => ({ ...l, archived: true }));
     closeProj();
-    router.refresh();
   };
   const doDelete = async () => {
     if (!projMenu) return;
+    const id = projMenu.id;
     setBusy(true);
-    await deleteProject(projMenu.id);
+    const res = await deleteProject(id);
     setBusy(false);
+    if (res?.error) {
+      alert("Could not delete: " + res.error);
+      return;
+    }
+    removeLaneById(id);
     closeProj();
-    router.refresh();
   };
   const closeProj = () => {
     setProjMenu(null);
@@ -843,25 +999,25 @@ export default function Timeline({
     });
   };
 
-  // Current tags for a node/project/ambition, respecting any optimistic override.
-  const nodeTagsOf = (n: LaneNode) => nodeTagOverride[n.id] ?? n.tags;
-  const projTagsOf = (p: Lane) => projTagOverride[p.id] ?? p.tags;
-  const ambTagsOf = (a: Ambition) => ambTagOverride[a.id] ?? a.tags;
-  // A project's colour (custom if set, else the origin colour).
-  const projColorOf = (p: Lane) => {
-    const c = p.id in projColorOverride ? projColorOverride[p.id] : p.color;
-    return c ?? colorFor(p.origin);
-  };
+  // Current tags / colours are now read directly from the lifted lanes state,
+  // since every mutation patches that state in place. These tiny helpers are
+  // kept for call-site readability.
+  const nodeTagsOf = (n: LaneNode) => n.tags;
+  const projTagsOf = (p: Lane) => p.tags;
+  const ambTagsOf = (a: Ambition) => a.tags;
+  const projColorOf = (p: Lane) => p.color ?? colorFor(p.origin);
 
   // Toggle instantly in the UI; save in the background; revert if the save fails.
   const applyNodeTag = (id: string, valueId: string, current: string[]) => {
+    const lane = laneOfNode(id);
+    if (!lane) return;
     const next = current.includes(valueId)
       ? current.filter((x) => x !== valueId)
       : [...current, valueId];
-    setNodeTagOverride((prev) => ({ ...prev, [id]: next }));
+    updateNodeIn(lane.id, id, { tags: next });
     toggleNodeTag(id, valueId).then((res) => {
       if (res?.error) {
-        setNodeTagOverride((prev) => ({ ...prev, [id]: current }));
+        updateNodeIn(lane.id, id, { tags: current });
         alert("Could not update tag: " + res.error);
       }
     });
@@ -870,50 +1026,61 @@ export default function Timeline({
     const next = current.includes(valueId)
       ? current.filter((x) => x !== valueId)
       : [...current, valueId];
-    setProjTagOverride((prev) => ({ ...prev, [id]: next }));
+    patchLane(id, (l) => ({ ...l, tags: next }));
     toggleProjectTag(id, valueId).then((res) => {
       if (res?.error) {
-        setProjTagOverride((prev) => ({ ...prev, [id]: current }));
+        patchLane(id, (l) => ({ ...l, tags: current }));
         alert("Could not update tag: " + res.error);
       }
     });
   };
   const applyAmbTag = (id: string, valueId: string, current: string[]) => {
+    const lane = laneOfAmbition(id);
+    if (!lane) return;
     const next = current.includes(valueId)
       ? current.filter((x) => x !== valueId)
       : [...current, valueId];
-    setAmbTagOverride((prev) => ({ ...prev, [id]: next }));
+    updateAmbitionIn(lane.id, id, { tags: next });
     toggleAmbitionTag(id, valueId).then((res) => {
       if (res?.error) {
-        setAmbTagOverride((prev) => ({ ...prev, [id]: current }));
+        updateAmbitionIn(lane.id, id, { tags: current });
         alert("Could not update tag: " + res.error);
       }
     });
   };
   // Set a project's colour optimistically (null = back to origin colour).
   const applyProjColor = (id: string, color: string | null) => {
-    setProjColorOverride((prev) => ({ ...prev, [id]: color }));
+    const prev = lanes.find((l) => l.id === id)?.color ?? null;
+    patchLane(id, (l) => ({ ...l, color }));
     setProjectColor(id, color).then((res) => {
-      if (res?.error) alert("Could not set colour: " + res.error);
+      if (res?.error) {
+        patchLane(id, (l) => ({ ...l, color: prev }));
+        alert("Could not set colour: " + res.error);
+      }
     });
   };
-  // Spine colour override. Null = ask the server to auto-pick from the palette
-  // by re-running the creation-order rule; userSet is reported back so we
-  // know whether to render the "auto" or "custom" hint in the picker.
+  // Spine colour. Null = ask the server to auto-pick from the palette by
+  // re-running the creation-order rule; the server returns the picked colour.
   const applySpineColor = (id: string, color: string | null) => {
-    setSpineColorOverride((prev) => ({
-      ...prev,
-      [id]: { color, userSet: color !== null },
+    const prevColor = lanes.find((l) => l.id === id)?.spineColor ?? null;
+    const prevUserSet = lanes.find((l) => l.id === id)?.spineUserSet ?? false;
+    // Best-guess optimistic value for the explicit case; the auto-pick path
+    // syncs to the server's chosen colour once it responds.
+    patchLane(id, (l) => ({
+      ...l,
+      spineColor: color ?? l.spineColor,
+      spineUserSet: color !== null,
     }));
     setProjectSpineColor(id, color).then((res) => {
-      if (res?.error) alert("Could not set spine colour: " + res.error);
+      if (res?.error) {
+        patchLane(id, (l) => ({ ...l, spineColor: prevColor, spineUserSet: prevUserSet }));
+        alert("Could not set spine colour: " + res.error);
+      } else if (res?.color) {
+        patchLane(id, (l) => ({ ...l, spineColor: res.color! }));
+      }
     });
   };
-  // Current spine colour for a lane, respecting any optimistic override.
-  const spineColorOf = (p: Lane): string => {
-    const ov = spineColorOverride[p.id];
-    return (ov?.color ?? p.spineColor) ?? MUTED;
-  };
+  const spineColorOf = (p: Lane): string => p.spineColor ?? MUTED;
   // Map attention state → dot colour.
   const attentionColorOf = (a: Attention): string =>
     a === "inactive" ? ATTENTION_INACTIVE : a === "alert" ? ATTENTION_ALERT : ATTENTION_NORMAL;
@@ -1036,7 +1203,7 @@ export default function Timeline({
               const last = p.nodes[p.nodes.length - 1];
               // A project's own colour (if set) shows at every zoom; otherwise the
               // wire follows the grey → origin-colour ramp.
-              const customColor = p.id in projColorOverride ? projColorOverride[p.id] : p.color;
+              const customColor = p.color;
               const wireColor = customColor ?? OXBLOOD;
               const wireOpacity = customColor ? wire.o : 0.45;
 
@@ -1048,7 +1215,8 @@ export default function Timeline({
               // above/below the wire, truncate when crowded, and unfittable solos
               // get absorbed into the nearest cluster — so a returned cluster's
               // membership may exceed what the time-gap threshold alone produced.
-              const { clusters, labels: nodeLabels } = layoutLaneLabels(p.nodes, xFor, nodeSize);
+              const { clusters, labels: nodeLabels } =
+                laneLayouts.get(p.id) ?? { clusters: [], labels: new Map() };
 
               // Same idea for ambitions (round markers are bigger, so a wider gap).
               const ambClusters: Ambition[][] = [];
@@ -1088,8 +1256,7 @@ export default function Timeline({
                             tags: projTagsOf(p),
                             color: customColor,
                             spineColor: spineColorOf(p),
-                            spineUserSet:
-                              spineColorOverride[p.id]?.userSet ?? p.spineUserSet,
+                            spineUserSet: p.spineUserSet,
                           })
                     }
                     className="sticky left-0 z-10 flex cursor-pointer items-stretch border-b border-r border-hairline bg-paper-surface hover:bg-paper"
@@ -1267,44 +1434,83 @@ export default function Timeline({
                                 strokeWidth={2.5}
                               />
                             )}
-                            <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
-                              <rect
-                                width={NODE}
-                                height={NODE}
-                                rx={7}
-                                ry={7}
-                                fill={NODE_FILL}
-                                stroke={OXBLOOD}
-                                strokeWidth={1.25}
-                              />
-                              {!n.done && n.stage > 0 && (
-                                <rect width={(NODE * n.stage) / 100} height={NODE} fill={OXBLOOD} fillOpacity={0.85} clipPath={`url(#clip-${n.id})`} />
-                              )}
-                              {(() => {
-                                const pos = pipPositions(ntags.length);
-                                return ntags.map((tid, di) => (
-                                  <circle
-                                    key={tid}
-                                    className="tag-pop"
-                                    cx={pos[di].x}
-                                    cy={pos[di].y}
-                                    r={pos[di].r}
-                                    fill={tagColors[tid] ?? MUTED}
-                                    stroke="#00000033"
-                                    strokeWidth={0.75}
+                            {(() => {
+                              // Tag channels:
+                              //   0 tags  → cream fill + oxblood outline (default)
+                              //   1+ tag  → fill = primary tag's colour, outline = darken(primary)
+                              //   2+ tags → extras render as thin colour bars below the node
+                              // The oxblood "deadline stage fill" is suppressed when any tag
+                              // is applied (tag wins the fill; the deadline data still lives
+                              // in the node menu / upcoming panel).
+                              const primaryTagId = ntags[0];
+                              const primaryColor = primaryTagId ? tagColors[primaryTagId] : null;
+                              const fill = primaryColor ?? NODE_FILL;
+                              const stroke = primaryColor ? darken(primaryColor) : OXBLOOD;
+                              const showStageFill = !n.done && n.stage > 0 && !primaryColor;
+                              return (
+                                <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
+                                  <rect
+                                    width={NODE}
+                                    height={NODE}
+                                    rx={7}
+                                    ry={7}
+                                    fill={fill}
+                                    stroke={stroke}
+                                    strokeWidth={1.25}
                                   />
-                                ));
-                              })()}
-                              <title>
-                                {n.label}
-                                {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}
-                                {n.done ? " (done)" : ""}
-                              </title>
-                            </g>
+                                  {showStageFill && (
+                                    <rect
+                                      width={(NODE * n.stage) / 100}
+                                      height={NODE}
+                                      fill={OXBLOOD}
+                                      fillOpacity={0.85}
+                                      clipPath={`url(#clip-${n.id})`}
+                                    />
+                                  )}
+                                  <title>
+                                    {n.label}
+                                    {n.deadline ? ` — deadline ${fmtEU(n.deadline)}` : ""}
+                                    {n.done ? " (done)" : ""}
+                                  </title>
+                                </g>
+                              );
+                            })()}
+                            {(() => {
+                              // Stacked base bars for tags 2..N. Hidden at zoom levels
+                              // where the node has shrunk (BARS_VISIBLE_MAX_DAYS).
+                              if (daysPerScreen > BARS_VISIBLE_MAX_DAYS) return null;
+                              const extras = ntags.slice(1);
+                              if (extras.length === 0) return null;
+                              const barW = nodeSize * BAR_WIDTH_FACTOR;
+                              const barX = cx - barW / 2;
+                              const barsY0 = top + nodeSize + BAR_GAP;
+                              return extras.map((tid, i) => (
+                                <rect
+                                  key={`bar-${n.id}-${tid}`}
+                                  x={barX}
+                                  y={barsY0 + i * (BAR_H + BAR_GAP)}
+                                  width={barW}
+                                  height={BAR_H}
+                                  rx={BAR_RX}
+                                  ry={BAR_RX}
+                                  fill={tagColors[tid] ?? MUTED}
+                                />
+                              ));
+                            })()}
                             {(() => {
                               const li = nodeLabels.get(n.id);
                               if (!li) return null;
-                              const y = li.side === "above" ? top - 6 : top + nodeSize + 13;
+                              // Push the below-label past the bar stack when bars are
+                              // visible — keeps the label clear of the colour stripes.
+                              const extras = ntags.slice(1);
+                              const showingBars = daysPerScreen <= BARS_VISIBLE_MAX_DAYS && extras.length > 0;
+                              const barStackH = showingBars
+                                ? extras.length * (BAR_H + BAR_GAP)
+                                : 0;
+                              const y =
+                                li.side === "above"
+                                  ? top - 6
+                                  : top + nodeSize + 13 + barStackH;
                               return (
                                 <text x={cx} y={y} fill={MUTED} fontSize={11} textAnchor="middle">
                                   <title>{li.fullText}</title>
@@ -2450,7 +2656,9 @@ export default function Timeline({
                   <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                   <div className="flex flex-wrap gap-1">
                     {c.values.map((v) => {
-                      const cur = nodeTagOverride[nodeMenu.id] ?? nodeMenu.tags;
+                      const cur =
+                        laneOfNode(nodeMenu.id)?.nodes.find((n) => n.id === nodeMenu.id)?.tags ??
+                        nodeMenu.tags;
                       const on = cur.includes(v.id);
                       return (
                         <button
@@ -2525,7 +2733,9 @@ export default function Timeline({
                   <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                   <div className="flex flex-wrap gap-1">
                     {c.values.map((v) => {
-                      const cur = ambTagOverride[ambMenu.id] ?? ambMenu.tags;
+                      const cur =
+                        laneOfAmbition(ambMenu.id)?.ambitions.find((a) => a.id === ambMenu.id)
+                          ?.tags ?? ambMenu.tags;
                       const on = cur.includes(v.id);
                       return (
                         <button
@@ -2582,7 +2792,7 @@ export default function Timeline({
                 <p className="mb-2 text-xs uppercase tracking-wide text-muted">Wire colour</p>
                 <div className="mb-5 flex flex-wrap items-center gap-2">
                   {(() => {
-                    const cur = projMenu.id in projColorOverride ? projColorOverride[projMenu.id] : projMenu.color;
+                    const cur = lanes.find((l) => l.id === projMenu.id)?.color ?? projMenu.color;
                     return (
                       <>
                         {PROJECT_COLORS.map((c) => (
@@ -2640,7 +2850,7 @@ export default function Timeline({
                       <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                       <div className="flex flex-wrap gap-1">
                         {c.values.map((v) => {
-                          const cur = projTagOverride[projMenu.id] ?? projMenu.tags;
+                          const cur = lanes.find((l) => l.id === projMenu.id)?.tags ?? projMenu.tags;
                           const on = cur.includes(v.id);
                           return (
                             <button

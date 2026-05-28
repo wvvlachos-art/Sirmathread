@@ -41,3 +41,15 @@ export const SPINE_PALETTE = [
 export const ATTENTION_ALERT = "#c0392b";    // any node deadline ≥ stage 3 or overdue
 export const ATTENTION_NORMAL = "#8a9a72";   // active, nothing urgent
 export const ATTENTION_INACTIVE = "#c4b48f"; // past the 45-day quiet threshold
+
+// Darken a hex colour for the node outline when a tag colours the fill.
+// Defaults to ~35% darker — enough contrast on every palette entry.
+export function darken(hex: string, amount = 0.35): string {
+  const h = hex.replace("#", "");
+  if (h.length !== 6) return hex;
+  const n = parseInt(h, 16);
+  const r = Math.max(0, Math.floor(((n >> 16) & 0xff) * (1 - amount)));
+  const g = Math.max(0, Math.floor(((n >> 8) & 0xff) * (1 - amount)));
+  const b = Math.max(0, Math.floor((n & 0xff) * (1 - amount)));
+  return "#" + ((r << 16) | (g << 8) | b).toString(16).padStart(6, "0");
+}
