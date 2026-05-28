@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { createProject, createManualNode, createAmbition } from "./actions";
 import MiniCalendar from "./MiniCalendar";
 
-const DAY = 86_400_000;
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const fmtEU = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB");
 
@@ -79,34 +78,34 @@ export default function NewProjectButton() {
   };
 
   const card =
-    "w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+    "w-full max-w-sm rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl";
   const input =
-    "w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500";
+    "w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood";
   const primary =
-    "rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60";
+    "rounded-md bg-oxblood px-4 py-2 text-sm font-medium text-paper hover:bg-oxblood-dark disabled:opacity-60";
   const ghost =
-    "rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800";
+    "rounded-md border border-hairline px-4 py-2 text-sm text-ink hover:bg-paper";
 
   return (
     <>
       <button
         onClick={open}
-        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
+        className="rounded-md bg-oxblood px-3 py-1.5 text-sm font-medium text-paper hover:bg-oxblood-dark"
       >
         + New project
       </button>
 
       {step !== "closed" && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
           onClick={() => !busy && close()}
         >
           <div onClick={(e) => e.stopPropagation()}>
             {step === "project" && (
               <form onSubmit={submitProject} className={card}>
-                <h2 className="mb-4 text-lg font-semibold text-zinc-100">New project</h2>
+                <h2 className="brand-serif mb-4 text-lg text-oxblood">New project</h2>
 
-                <label className="mb-1 block text-sm text-zinc-300">Project name</label>
+                <label className="mb-1 block text-sm text-ink">Project name</label>
                 <input
                   autoFocus
                   value={projName}
@@ -115,9 +114,9 @@ export default function NewProjectButton() {
                   className={`mb-4 ${input}`}
                 />
 
-                <label className="mb-1 block text-sm text-zinc-300">Start date</label>
+                <label className="mb-1 block text-sm text-ink">Start date</label>
                 <MiniCalendar value={projStart} onChange={setProjStart} />
-                <p className="mb-5 mt-1 text-xs text-zinc-500">Selected: {fmtEU(projStart)}</p>
+                <p className="mb-5 mt-1 text-xs text-muted">Selected: {fmtEU(projStart)}</p>
 
                 <div className="flex justify-end gap-2">
                   <button type="button" onClick={close} disabled={busy} className={ghost}>
@@ -132,10 +131,10 @@ export default function NewProjectButton() {
 
             {step === "prompt" && (
               <div className={card}>
-                <h2 className="mb-1 text-lg font-semibold text-zinc-100">
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">
                   {projName || "Project"} created
                 </h2>
-                <p className="mb-5 text-sm text-zinc-400">Add a node to it?</p>
+                <p className="mb-5 text-sm text-muted">Add a node to it?</p>
                 <div className="flex justify-end gap-2">
                   <button onClick={close} className={ghost}>
                     Good, done
@@ -149,10 +148,10 @@ export default function NewProjectButton() {
 
             {step === "node" && (
               <form onSubmit={submitNode} className={card}>
-                <h2 className="mb-1 text-lg font-semibold text-zinc-100">New node</h2>
-                <p className="mb-4 text-sm text-zinc-400">for {projName}</p>
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">New node</h2>
+                <p className="mb-4 text-sm text-muted">for {projName}</p>
 
-                <label className="mb-1 block text-sm text-zinc-300">Node title</label>
+                <label className="mb-1 block text-sm text-ink">Node title</label>
                 <input
                   autoFocus
                   value={nodeTitle}
@@ -161,20 +160,20 @@ export default function NewProjectButton() {
                   className={`mb-4 ${input}`}
                 />
 
-                <label className="mb-1 block text-sm text-zinc-300">Date</label>
+                <label className="mb-1 block text-sm text-ink">Date</label>
                 <MiniCalendar value={nodeDate} onChange={setNodeDate} minDate={floor} />
-                <p className="mb-1 mt-1 text-xs text-zinc-500">
+                <p className="mb-1 mt-1 text-xs text-muted">
                   Selected: {fmtEU(nodeDate)} · can&apos;t be before {fmtEU(floor)}
                 </p>
                 <p className="mb-2 text-xs">
                   {nodeDate > todayIso() ? (
-                    <span className="text-blue-400">Future date → added as an Ambition (round)</span>
+                    <span className="text-oxblood">Future date → added as an Ambition (round)</span>
                   ) : (
-                    <span className="text-zinc-500">Today or past → added as a node (square)</span>
+                    <span className="text-muted">Today or past → added as a node (square)</span>
                   )}
                 </p>
                 {nodeDate > todayIso() && (
-                  <label className="mb-5 flex items-center gap-2 text-sm text-zinc-300">
+                  <label className="mb-5 flex items-center gap-2 text-sm text-ink">
                     <input
                       type="checkbox"
                       checked={nodeAsDeadline}

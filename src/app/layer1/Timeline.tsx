@@ -26,6 +26,17 @@ import {
 } from "./actions";
 import MiniCalendar from "./MiniCalendar";
 import { useWand } from "./wand";
+import {
+  NODE_FILL,
+  OXBLOOD,
+  INK,
+  MUTED,
+  HAIRLINE,
+  PAPER,
+  PAPER_SURFACE,
+  NOTE_FILL,
+  NOTE_BORDER,
+} from "@/lib/theme";
 
 type TagCat = {
   id: string;
@@ -59,20 +70,12 @@ type Lane = {
   notes: Note[];
 };
 
-const GMAIL_COLOR = "#34d399"; // light green
-const MANUAL_COLOR = "#2563eb"; // deep blue
-const colorFor = (origin: string) => (origin === "manual" ? MANUAL_COLOR : GMAIL_COLOR);
+// Origin-colour distinction is removed in this visual pass; both Gmail and
+// manual nodes render with the same cream fill + oxblood outline. The
+// `colorFor` helper is kept so step 2 can rip out the origin plumbing cleanly.
+const colorFor = (_origin: string) => NODE_FILL;
 
-// The connector "wire" between nodes. Neutral grey up close; as you zoom out it
-// gets thicker, more opaque, and tinted toward the project's origin colour.
-const NEUTRAL_WIRE = "#3f3f46";
-function lerpHex(a: string, b: string, t: number): string {
-  const ch = (h: string, i: number) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
-  const mix = (i: number) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t);
-  return "#" + [0, 1, 2].map((i) => mix(i).toString(16).padStart(2, "0")).join("");
-}
-
-// Preset palette for per-project colour-coding.
+// Preset palette for per-project colour-coding (custom project rail dot/wire).
 const PROJECT_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899"];
 
 const DAY = 86_400_000;
@@ -104,10 +107,13 @@ const LABEL_MAX = 26;
 const truncLabel = (s: string) => (s.length > LABEL_MAX ? s.slice(0, LABEL_MAX - 1) + "…" : s);
 
 // A little wand (stick + star) used as the cursor while the wand is armed.
+// Oxblood stick + gold star with a paper-coloured halo so it reads on the
+// kraft canvas regardless of what's under it.
 const WAND_SVG =
   "<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'>" +
-  "<line x1='3' y1='25' x2='17' y2='11' stroke='white' stroke-width='2.6' stroke-linecap='round'/>" +
-  "<path d='M21 2 l1.5 4.2 l4.2 1.5 l-4.2 1.5 l-1.5 4.2 l-1.5-4.2 l-4.2-1.5 l4.2-1.5 z' fill='#facc15' stroke='white' stroke-width='0.6'/>" +
+  "<line x1='3' y1='25' x2='17' y2='11' stroke='#e7dcc4' stroke-width='4.5' stroke-linecap='round'/>" +
+  "<line x1='3' y1='25' x2='17' y2='11' stroke='#7a2718' stroke-width='2.6' stroke-linecap='round'/>" +
+  "<path d='M21 2 l1.5 4.2 l4.2 1.5 l-4.2 1.5 l-1.5 4.2 l-1.5-4.2 l-4.2-1.5 l4.2-1.5 z' fill='#eab308' stroke='#7a2718' stroke-width='0.6'/>" +
   "</svg>";
 const WAND_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(WAND_SVG)}") 21 6, crosshair`;
 
@@ -280,16 +286,17 @@ export default function Timeline({
   const nodeSize = daysPerScreen <= 30 ? NODE : daysPerScreen <= 90 ? 40 : 32;
   const nodeScale = nodeSize / NODE;
 
-  // Wire prominence grows with the span: thin/faint/grey up close → thick/solid/
-  // origin-coloured zoomed out. `mix` = how far the colour leans to origin colour.
+  // Wire thickness grows with the span; default colour stays a constant
+  // oxblood-at-45%. A per-project custom colour overrides the default and
+  // uses the opacity ramp so it reads at every zoom.
   const wire =
     daysPerScreen <= 7
-      ? { w: 1, o: 0.6, mix: 0 }
+      ? { w: 1, o: 0.6 }
       : daysPerScreen <= 30
-      ? { w: 1.25, o: 0.75, mix: 0 }
+      ? { w: 1.25, o: 0.75 }
       : daysPerScreen <= 90
-      ? { w: 1.5, o: 0.85, mix: 0.4 }
-      : { w: 2, o: 1, mix: 1 };
+      ? { w: 1.5, o: 0.85 }
+      : { w: 2, o: 1 };
 
   // ---- "Upcoming": open deadlines + ambitions across every project, soonest first ----
   const todayStart = new Date();
@@ -730,17 +737,17 @@ export default function Timeline({
   }
   const showDayNumbers = pxPerDay >= 16;
 
-  const btn = "rounded-md border border-zinc-700 bg-zinc-900/90 px-2.5 py-1 text-sm text-zinc-200 hover:bg-zinc-800";
+  const btn = "rounded-md border border-hairline bg-paper-surface/90 px-2.5 py-1 text-sm text-ink hover:bg-paper-surface";
   const zoomBtn = (active: boolean) =>
     `rounded-md px-2.5 py-1 text-sm ${
       active
-        ? "bg-zinc-100 text-zinc-900"
-        : "border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:bg-zinc-800"
+        ? "bg-oxblood text-paper"
+        : "border border-hairline bg-paper-surface/90 text-ink hover:bg-paper-surface"
     }`;
-  const card = "max-h-[85vh] w-full max-w-sm overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
-  const primary = "rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60";
-  const ghost = "rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800";
-  const danger = "rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60";
+  const card = "max-h-[85vh] w-full max-w-sm overflow-auto rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl";
+  const primary = "rounded-md bg-oxblood px-4 py-2 text-sm font-medium text-paper hover:bg-oxblood-dark disabled:opacity-60";
+  const ghost = "rounded-md border border-hairline px-4 py-2 text-sm text-ink hover:bg-paper";
+  const danger = "rounded-md bg-oxblood-dark px-4 py-2 text-sm font-medium text-paper hover:bg-oxblood disabled:opacity-60";
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -754,17 +761,17 @@ export default function Timeline({
             {/* Axis row */}
             <div className="sticky top-0 z-20 flex">
               <div
-                className="sticky left-0 z-30 border-b border-r border-zinc-800 bg-zinc-950"
+                className="sticky left-0 z-30 border-b border-r border-hairline bg-paper-surface"
                 style={{ width: LABEL_W, height: AXIS_H }}
               />
-              <svg width={canvasW} height={AXIS_H} className="border-b border-zinc-800 bg-zinc-950">
+              <svg width={canvasW} height={AXIS_H} className="border-b border-hairline" style={{ background: PAPER_SURFACE }}>
                 {showDayNumbers &&
                   days.map((t, i) => {
                     const x = xFor(t);
                     return (
                       <g key={i}>
-                        <line x1={x} y1={AXIS_H - 9} x2={x} y2={AXIS_H} stroke="#27272a" />
-                        <text x={x + 3} y={AXIS_H - 11} fill="#71717a" fontSize={9}>
+                        <line x1={x} y1={AXIS_H - 9} x2={x} y2={AXIS_H} stroke={HAIRLINE} />
+                        <text x={x + 3} y={AXIS_H - 11} fill={MUTED} fontSize={9}>
                           {new Date(t).getDate()}
                         </text>
                       </g>
@@ -772,14 +779,14 @@ export default function Timeline({
                   })}
                 {months.map((m, i) => (
                   <g key={`m${i}`}>
-                    <line x1={m.x} y1={0} x2={m.x} y2={AXIS_H} stroke="#3f3f46" />
-                    <text x={m.x + 5} y={15} fill="#d4d4d8" fontSize={12} fontWeight={600}>
+                    <line x1={m.x} y1={0} x2={m.x} y2={AXIS_H} stroke={HAIRLINE} />
+                    <text x={m.x + 5} y={15} fill={INK} fontSize={12} fontWeight={500} fontFamily="Georgia, serif">
                       {m.label}
                     </text>
                   </g>
                 ))}
-                <line x1={todayX} y1={0} x2={todayX} y2={AXIS_H} stroke="#fbbf24" strokeWidth={1.5} />
-                <text x={todayX + 4} y={28} fill="#fbbf24" fontSize={10}>
+                <line x1={todayX} y1={0} x2={todayX} y2={AXIS_H} stroke={OXBLOOD} strokeWidth={1.5} />
+                <text x={todayX + 4} y={28} fill={OXBLOOD} fontSize={10}>
                   Today
                 </text>
               </svg>
@@ -793,11 +800,8 @@ export default function Timeline({
               // A project's own colour (if set) shows at every zoom; otherwise the
               // wire follows the grey → origin-colour ramp.
               const customColor = p.id in projColorOverride ? projColorOverride[p.id] : p.color;
-              const wireColor = customColor
-                ? customColor
-                : wire.mix === 0
-                ? NEUTRAL_WIRE
-                : lerpHex(NEUTRAL_WIRE, colorFor(p.origin), wire.mix);
+              const wireColor = customColor ?? OXBLOOD;
+              const wireOpacity = customColor ? wire.o : 0.45;
 
               // Group nodes that bunch up in time. A cluster of 2+ collapses into a
               // single "count" marker; its members' titles fan out above/below the
@@ -854,7 +858,7 @@ export default function Timeline({
                             color: customColor,
                           })
                     }
-                    className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-zinc-800 bg-zinc-950 px-4 hover:bg-zinc-900"
+                    className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-hairline bg-paper-surface px-4 hover:bg-paper"
                     style={{ width: LABEL_W, height: laneH }}
                     title={armed ? `Stamp "${armed.value}"` : "Project options"}
                   >
@@ -865,7 +869,7 @@ export default function Timeline({
                           jumpToTime(p.nodes[0].t);
                         }}
                         title="Jump to the start of this project"
-                        className="shrink-0 text-zinc-500 hover:text-zinc-200"
+                        className="shrink-0 text-muted hover:text-ink"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
                           <rect x="5" y="5" width="2.4" height="14" rx="1" fill="currentColor" />
@@ -877,30 +881,30 @@ export default function Timeline({
                       className="inline-block h-3 w-3 shrink-0 rounded-full"
                       style={{ background: projColorOf(p) }}
                     />
-                    <span className="line-clamp-2 text-sm font-medium leading-tight" title={p.name}>{p.name}</span>
+                    <span className="brand-serif line-clamp-2 text-sm leading-tight text-ink" title={p.name}>{p.name}</span>
                     {ptags.length > 0 && (
                       <span className="flex shrink-0 items-center gap-0.5">
                         {ptags.map((tid) => (
                           <span
                             key={tid}
                             className="tag-pop h-3 w-3 rounded-full"
-                            style={{ background: tagColors[tid] ?? "#a1a1aa" }}
+                            style={{ background: tagColors[tid] ?? MUTED }}
                           />
                         ))}
                       </span>
                     )}
                     {p.archived && (
-                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                      <span className="shrink-0 rounded border border-hairline bg-paper px-1.5 py-0.5 text-[10px] text-muted">
                         archived
                       </span>
                     )}
                   </div>
 
-                  <svg width={canvasW} height={laneH} className="border-b border-zinc-800">
+                  <svg width={canvasW} height={laneH} className="border-b border-hairline" style={{ background: PAPER }}>
                     <defs>
                       {p.nodes.map((n) => (
                         <clipPath key={n.id} id={`clip-${n.id}`}>
-                          <rect width={NODE} height={NODE} rx={10} ry={10} />
+                          <rect width={NODE} height={NODE} rx={7} ry={7} />
                         </clipPath>
                       ))}
                       {p.ambitions.map((a) => (
@@ -911,9 +915,9 @@ export default function Timeline({
                     </defs>
 
                     {months.map((m, i) => (
-                      <line key={i} x1={m.x} y1={0} x2={m.x} y2={laneH} stroke="#1c1c1f" />
+                      <line key={i} x1={m.x} y1={0} x2={m.x} y2={laneH} stroke={HAIRLINE} strokeOpacity={0.45} />
                     ))}
-                    <line x1={todayX} y1={0} x2={todayX} y2={laneH} stroke="#3f3722" />
+                    <line x1={todayX} y1={0} x2={todayX} y2={laneH} stroke={OXBLOOD} strokeOpacity={0.25} />
 
                     {p.nodes.length > 1 && (
                       <line
@@ -923,7 +927,7 @@ export default function Timeline({
                         y2={centerY}
                         stroke={wireColor}
                         strokeWidth={wire.w}
-                        strokeOpacity={wire.o}
+                        strokeOpacity={wireOpacity}
                       />
                     )}
 
@@ -934,7 +938,8 @@ export default function Timeline({
                         y1={centerY}
                         x2={xFor(a.t)}
                         y2={centerY}
-                        stroke="#52525b"
+                        stroke={OXBLOOD}
+                        strokeOpacity={0.45}
                         strokeWidth={2}
                         strokeDasharray="5 5"
                       />
@@ -950,7 +955,7 @@ export default function Timeline({
                           y1={centerY}
                           x2={xFor(np.x)}
                           y2={centerY + np.y}
-                          stroke="#d97706"
+                          stroke={NOTE_BORDER}
                           strokeWidth={1.5}
                           strokeDasharray="2 3"
                         />
@@ -980,16 +985,24 @@ export default function Timeline({
                                 y={top - 3}
                                 width={nodeSize + 6}
                                 height={nodeSize + 6}
-                                rx={13}
+                                rx={10}
                                 fill="none"
-                                stroke="#fde68a"
+                                stroke={OXBLOOD}
                                 strokeWidth={2.5}
                               />
                             )}
                             <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
-                              <rect width={NODE} height={NODE} rx={10} ry={10} fill={n.done ? "#6b7280" : colorFor(n.origin)} />
+                              <rect
+                                width={NODE}
+                                height={NODE}
+                                rx={7}
+                                ry={7}
+                                fill={NODE_FILL}
+                                stroke={OXBLOOD}
+                                strokeWidth={1.25}
+                              />
                               {!n.done && n.stage > 0 && (
-                                <rect width={(NODE * n.stage) / 100} height={NODE} fill="#ef4444" clipPath={`url(#clip-${n.id})`} />
+                                <rect width={(NODE * n.stage) / 100} height={NODE} fill={OXBLOOD} fillOpacity={0.85} clipPath={`url(#clip-${n.id})`} />
                               )}
                               {(() => {
                                 const pos = pipPositions(ntags.length);
@@ -1000,8 +1013,8 @@ export default function Timeline({
                                     cx={pos[di].x}
                                     cy={pos[di].y}
                                     r={pos[di].r}
-                                    fill={tagColors[tid] ?? "#a1a1aa"}
-                                    stroke="#00000066"
+                                    fill={tagColors[tid] ?? MUTED}
+                                    stroke="#00000033"
                                     strokeWidth={0.75}
                                   />
                                 ));
@@ -1012,7 +1025,7 @@ export default function Timeline({
                                 {n.done ? " (done)" : ""}
                               </title>
                             </g>
-                            <text x={cx} y={top + nodeSize + 13} fill="#a1a1aa" fontSize={11} textAnchor="middle">
+                            <text x={cx} y={top + nodeSize + 13} fill={MUTED} fontSize={11} textAnchor="middle">
                               {truncLabel(n.label)}
                             </text>
                           </g>
@@ -1043,9 +1056,9 @@ export default function Timeline({
                             const short = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
                             return (
                               <g key={n.id} className="cursor-pointer" onClick={() => openNode(n)}>
-                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke="#52525b" strokeWidth={1} />
-                                <circle cx={mx} cy={centerY} r={2.5} fill="#a1a1aa" />
-                                <text x={mx} y={ty} fill="#d4d4d8" fontSize={10} textAnchor="middle">
+                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke={HAIRLINE} strokeWidth={1} />
+                                <circle cx={mx} cy={centerY} r={2.5} fill={OXBLOOD} />
+                                <text x={mx} y={ty} fill={INK} fontSize={10} textAnchor="middle">
                                   {short}
                                 </text>
                               </g>
@@ -1082,15 +1095,15 @@ export default function Timeline({
                             }
                           >
                             {hiInCluster && (
-                              <rect x={left - 3} y={top - 3} width={nodeSize + 6} height={nodeSize + 6} rx={13} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                              <rect x={left - 3} y={top - 3} width={nodeSize + 6} height={nodeSize + 6} rx={10} fill="none" stroke={OXBLOOD} strokeWidth={2.5} />
                             )}
-                            <rect x={left} y={top} width={nodeSize} height={nodeSize} rx={10} ry={10} fill={allDone ? "#6b7280" : colorFor(p.origin)} stroke="#0a0a0a" strokeWidth={1.5} />
-                            <text x={cxC} y={centerY + 6} fill={allDone ? "#d4d4d8" : "#fff"} fontSize={17} fontWeight={700} textAnchor="middle">
+                            <rect x={left} y={top} width={nodeSize} height={nodeSize} rx={7} ry={7} fill={NODE_FILL} stroke={OXBLOOD} strokeWidth={1.5} />
+                            <text x={cxC} y={centerY + 6} fill={OXBLOOD} fontSize={17} fontWeight={500} textAnchor="middle" fontFamily="Georgia, serif">
                               {cl.length}
                             </text>
-                            {anyDeadline && <circle cx={left + nodeSize - 5} cy={top + 5} r={3.5} fill="#ef4444" stroke="#0a0a0a" strokeWidth={1} />}
+                            {anyDeadline && <circle cx={left + nodeSize - 5} cy={top + 5} r={3.5} fill={OXBLOOD} stroke={NODE_FILL} strokeWidth={1} />}
                             {doneCount > 0 && !allDone && (
-                              <circle cx={left + 5} cy={top + 5} r={3.5} fill="#22c55e" stroke="#0a0a0a" strokeWidth={1} />
+                              <circle cx={left + 5} cy={top + 5} r={3.5} fill="#22c55e" stroke={NODE_FILL} strokeWidth={1} />
                             )}
                           </g>
                         </g>
@@ -1113,16 +1126,16 @@ export default function Timeline({
                             onClick={() => openAmbition(a)}
                           >
                             {isHi && (
-                              <circle cx={cx} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                              <circle cx={cx} cy={centerY} r={AMB_R + 4} fill="none" stroke={OXBLOOD} strokeWidth={2.5} />
                             )}
                             <circle
                               cx={cx}
                               cy={centerY}
                               r={AMB_R}
-                              fill={a.done ? "#3f3f46" : colorFor(p.origin)}
-                              fillOpacity={a.done ? 0.5 : 0.9}
-                              stroke="#e4e4e7"
-                              strokeWidth={1.5}
+                              fill={NODE_FILL}
+                              fillOpacity={a.done ? 0.5 : 1}
+                              stroke={OXBLOOD}
+                              strokeWidth={1.25}
                               strokeDasharray="4 3"
                             />
                             {a.isDeadline && !a.done && a.stage > 0 && (
@@ -1131,12 +1144,13 @@ export default function Timeline({
                                 y={centerY - AMB_R}
                                 width={(2 * AMB_R * a.stage) / 100}
                                 height={2 * AMB_R}
-                                fill="#ef4444"
+                                fill={OXBLOOD}
+                                fillOpacity={0.85}
                                 clipPath={`url(#aclip-${a.id})`}
                               />
                             )}
                             {a.done && (
-                              <text x={cx} y={centerY + 5} fill="#e4e4e7" fontSize={16} textAnchor="middle">
+                              <text x={cx} y={centerY + 5} fill={OXBLOOD} fontSize={16} textAnchor="middle">
                                 ✓
                               </text>
                             )}
@@ -1153,8 +1167,8 @@ export default function Timeline({
                                     cx={cx + (pos[di].x - NODE / 2) * f}
                                     cy={centerY + (pos[di].y - NODE / 2) * f}
                                     r={pos[di].r}
-                                    fill={tagColors[tid] ?? "#a1a1aa"}
-                                    stroke="#00000066"
+                                    fill={tagColors[tid] ?? MUTED}
+                                    stroke="#00000033"
                                     strokeWidth={0.75}
                                   />
                                 ));
@@ -1163,7 +1177,7 @@ export default function Timeline({
                               Ambition: {a.title} — target {fmtEU(a.t)}
                               {a.done ? " (done)" : ""} — click to open
                             </title>
-                            <text x={cx} y={centerY + AMB_R + 15} fill="#a1a1aa" fontSize={11} textAnchor="middle">
+                            <text x={cx} y={centerY + AMB_R + 15} fill={MUTED} fontSize={11} textAnchor="middle">
                               {truncLabel(a.title)}
                             </text>
                           </g>
@@ -1191,9 +1205,9 @@ export default function Timeline({
                             const short = a.title.length > 16 ? a.title.slice(0, 15) + "…" : a.title;
                             return (
                               <g key={a.id} className="cursor-pointer" onClick={() => toggle(a.id, !a.done)}>
-                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke="#52525b" strokeWidth={1} strokeDasharray="2 2" />
-                                <circle cx={mx} cy={centerY} r={2.5} fill="#a1a1aa" />
-                                <text x={mx} y={ty} fill="#d4d4d8" fontSize={10} textAnchor="middle">
+                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke={HAIRLINE} strokeWidth={1} strokeDasharray="2 2" />
+                                <circle cx={mx} cy={centerY} r={2.5} fill={OXBLOOD} />
+                                <text x={mx} y={ty} fill={INK} fontSize={10} textAnchor="middle">
                                   {a.done ? "✓ " : ""}
                                   {short}
                                 </text>
@@ -1221,24 +1235,24 @@ export default function Timeline({
                             }
                           >
                             {hiInCluster && (
-                              <circle cx={cxC} cy={centerY} r={AMB_R + 4} fill="none" stroke="#fde68a" strokeWidth={2.5} />
+                              <circle cx={cxC} cy={centerY} r={AMB_R + 4} fill="none" stroke={OXBLOOD} strokeWidth={2.5} />
                             )}
                             <circle
                               cx={cxC}
                               cy={centerY}
                               r={AMB_R}
-                              fill={allDone ? "#3f3f46" : colorFor(p.origin)}
-                              fillOpacity={allDone ? 0.5 : 0.9}
-                              stroke="#e4e4e7"
-                              strokeWidth={1.5}
+                              fill={NODE_FILL}
+                              fillOpacity={allDone ? 0.5 : 1}
+                              stroke={OXBLOOD}
+                              strokeWidth={1.25}
                               strokeDasharray="4 3"
                             />
-                            <text x={cxC} y={centerY + 6} fill="#fff" fontSize={17} fontWeight={700} textAnchor="middle">
+                            <text x={cxC} y={centerY + 6} fill={OXBLOOD} fontSize={17} fontWeight={500} textAnchor="middle" fontFamily="Georgia, serif">
                               {cl.length}
                             </text>
-                            {anyDue && <circle cx={cxC + AMB_R - 5} cy={centerY - AMB_R + 5} r={3.5} fill="#ef4444" stroke="#0a0a0a" strokeWidth={1} />}
+                            {anyDue && <circle cx={cxC + AMB_R - 5} cy={centerY - AMB_R + 5} r={3.5} fill={OXBLOOD} stroke={NODE_FILL} strokeWidth={1} />}
                             {doneCount > 0 && !allDone && (
-                              <circle cx={cxC - AMB_R + 5} cy={centerY - AMB_R + 5} r={3.5} fill="#22c55e" stroke="#0a0a0a" strokeWidth={1} />
+                              <circle cx={cxC - AMB_R + 5} cy={centerY - AMB_R + 5} r={3.5} fill="#22c55e" stroke={NODE_FILL} strokeWidth={1} />
                             )}
                           </g>
                         </g>
@@ -1250,8 +1264,8 @@ export default function Timeline({
                       className="cursor-pointer"
                       onClick={() => setAddChoice({ projectId: p.id, projectName: p.name, minDate, anchorNodeId, anchorT })}
                     >
-                      <circle cx={plusX} cy={plusY} r={10} fill="#18181b" stroke="#a1a1aa" strokeWidth={1.5} />
-                      <text x={plusX} y={plusY + 4} fill="#e4e4e7" fontSize={14} textAnchor="middle">
+                      <circle cx={plusX} cy={plusY} r={10} fill={PAPER_SURFACE} stroke={OXBLOOD} strokeWidth={1.25} />
+                      <text x={plusX} y={plusY + 4} fill={OXBLOOD} fontSize={14} textAnchor="middle">
                         +
                       </text>
                       <title>Add a note or ambition to {p.name}</title>
@@ -1312,20 +1326,24 @@ export default function Timeline({
                         title={isEditing ? "" : "Click to open · drag to move · corner to resize"}
                       >
                         {isEditing ? (
-                          <div className="flex flex-col gap-1 rounded-md border border-amber-500/70 bg-amber-100 p-2 text-amber-950 shadow">
+                          <div
+                            className="flex flex-col gap-1 rounded-md p-2 shadow"
+                            style={{ background: NOTE_FILL, border: `1px solid ${NOTE_BORDER}`, color: INK }}
+                          >
                             <textarea
                               autoFocus
                               value={editBody}
                               onChange={(e) => setEditBody(e.target.value)}
                               onBlur={() => saveNoteBody(nt.id)}
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="w-60 resize-none rounded bg-white p-2 text-sm text-amber-950 outline-none"
+                              className="w-60 resize-none rounded p-2 text-sm outline-none"
+                              style={{ background: PAPER, color: INK }}
                               rows={6}
                             />
                             <button
                               onPointerDown={(e) => e.stopPropagation()}
                               onClick={() => removeNoteById(nt.id)}
-                              className="self-end text-xs text-amber-700 hover:text-red-600"
+                              className="self-end text-xs text-muted hover:text-oxblood"
                             >
                               Delete
                             </button>
@@ -1333,10 +1351,18 @@ export default function Timeline({
                         ) : (
                           <div className="relative">
                             <div
-                              className="overflow-hidden rounded-md border border-amber-500/70 bg-amber-100 shadow"
-                              style={{ width: noteSizes[nt.id] ?? NOTE_DEFAULT_W, height: noteHeight(noteSizes[nt.id] ?? NOTE_DEFAULT_W) }}
+                              className="overflow-hidden rounded-md shadow"
+                              style={{
+                                width: noteSizes[nt.id] ?? NOTE_DEFAULT_W,
+                                height: noteHeight(noteSizes[nt.id] ?? NOTE_DEFAULT_W),
+                                background: NOTE_FILL,
+                                border: `1px solid ${NOTE_BORDER}`,
+                              }}
                             >
-                              <span className="block whitespace-pre-wrap break-words px-1 py-0.5 text-[10px] leading-tight text-amber-950 line-clamp-2">
+                              <span
+                                className="block whitespace-pre-wrap break-words px-1 py-0.5 text-[10px] leading-tight line-clamp-2"
+                                style={{ color: INK }}
+                              >
                                 {nt.body}
                               </span>
                             </div>
@@ -1360,7 +1386,8 @@ export default function Timeline({
                                 setResizingNote(null);
                                 sizeRef.current = null;
                               }}
-                              className="absolute -bottom-1 -right-1 h-3 w-3 cursor-se-resize rounded-full border border-amber-700 bg-amber-300"
+                              className="absolute -bottom-1 -right-1 h-3 w-3 cursor-se-resize rounded-full"
+                              style={{ background: NOTE_BORDER, border: `1px solid ${OXBLOOD}` }}
                               title="Drag to resize"
                             />
                           </div>
@@ -1378,22 +1405,21 @@ export default function Timeline({
       {/* Hover-to-peek list for a count badge */}
       {peek && (
         <div
-          className="pointer-events-none fixed z-50 w-56 rounded-md border border-zinc-700 bg-zinc-900/95 p-2 text-xs shadow-xl backdrop-blur"
+          className="pointer-events-none fixed z-50 w-56 rounded-lg border border-hairline bg-paper-surface/95 p-2 text-xs text-ink shadow-xl backdrop-blur"
           style={{
             left: Math.min(peek.x + 14, (typeof window !== "undefined" ? window.innerWidth : 9999) - 240),
             top: peek.y + 14,
           }}
         >
-          <div className="mb-1 truncate font-medium text-zinc-300">{peek.title}</div>
+          <div className="brand-serif mb-1 truncate text-ink">{peek.title}</div>
           <ul className="flex max-h-60 flex-col gap-0.5 overflow-hidden">
             {peek.items.map((it, i) => (
               <li key={i} className="flex items-center gap-1.5">
                 <span
-                  className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                    it.done ? "bg-zinc-500" : it.due ? "bg-red-500" : "bg-emerald-400"
-                  }`}
+                  className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ background: it.done ? MUTED : it.due ? OXBLOOD : "#22c55e" }}
                 />
-                <span className={`truncate ${it.done ? "text-zinc-500 line-through" : "text-zinc-300"}`}>{it.label}</span>
+                <span className={`truncate ${it.done ? "text-muted line-through" : "text-ink"}`}>{it.label}</span>
               </li>
             ))}
           </ul>
@@ -1402,11 +1428,11 @@ export default function Timeline({
 
       {/* Magic-wand active banner */}
       {armed && (
-        <div className="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-blue-400 bg-blue-600/90 px-4 py-1.5 text-sm text-white shadow backdrop-blur">
+        <div className="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-oxblood bg-oxblood/90 px-4 py-1.5 text-sm text-paper shadow backdrop-blur">
           <span>
             🪄 Tagging with <strong>{armed.value}</strong> — click nodes/projects
           </span>
-          <button onClick={() => setArmed(null)} className="rounded bg-white/20 px-2 py-0.5 hover:bg-white/30">
+          <button onClick={() => setArmed(null)} className="rounded bg-paper/20 px-2 py-0.5 hover:bg-paper/30">
             Stop (Esc)
           </button>
         </div>
@@ -1422,14 +1448,14 @@ export default function Timeline({
               setSearchOpen(false);
               setUpcomingOpen(true);
             }}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+            className="flex items-center gap-2 rounded-lg border border-hairline bg-paper-surface/90 px-3 py-1.5 text-sm text-ink shadow backdrop-blur hover:bg-paper-surface"
             title="Upcoming deadlines and ambitions"
           >
             Upcoming
             {upcoming.length > 0 && (
               <span
                 className={`rounded-full px-1.5 py-0.5 text-[11px] ${
-                  overdueCount ? "bg-red-600 text-white" : "bg-zinc-700 text-zinc-200"
+                  overdueCount ? "bg-oxblood text-paper" : "bg-paper text-ink border border-hairline"
                 }`}
               >
                 {overdueCount ? `${overdueCount} overdue` : upcoming.length}
@@ -1443,12 +1469,12 @@ export default function Timeline({
               setSearchOpen(false);
               setRecentOpen(true);
             }}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+            className="flex items-center gap-2 rounded-lg border border-hairline bg-paper-surface/90 px-3 py-1.5 text-sm text-ink shadow backdrop-blur hover:bg-paper-surface"
             title="Nodes from the last 7 days"
           >
             Recent
             {recent.length > 0 && (
-              <span className="rounded-full bg-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-200">{recent.length}</span>
+              <span className="rounded-full border border-hairline bg-paper px-1.5 py-0.5 text-[11px] text-ink">{recent.length}</span>
             )}
           </button>
           <button
@@ -1458,7 +1484,7 @@ export default function Timeline({
               setSearchOpen(false);
               setTagFindOpen(true);
             }}
-            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+            className="flex items-center gap-2 rounded-lg border border-hairline bg-paper-surface/90 px-3 py-1.5 text-sm text-ink shadow backdrop-blur hover:bg-paper-surface"
             title="Find everything carrying a tag"
           >
             By tag
@@ -1466,14 +1492,14 @@ export default function Timeline({
         </div>
       )}
       {upcomingOpen && (
-        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
-          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
-            <span className="text-sm font-semibold text-zinc-100">
-              Upcoming{overdueCount > 0 && <span className="ml-2 text-xs font-normal text-red-400">{overdueCount} overdue</span>}
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-hairline bg-paper-surface/95 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
+            <span className="brand-serif text-sm text-ink">
+              Upcoming{overdueCount > 0 && <span className="ml-2 text-xs font-normal text-oxblood">{overdueCount} overdue</span>}
             </span>
             <button
               onClick={() => setUpcomingOpen(false)}
-              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              className="rounded px-1.5 text-muted hover:bg-paper hover:text-ink"
               title="Close"
             >
               ✕
@@ -1481,7 +1507,7 @@ export default function Timeline({
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {upcoming.length === 0 ? (
-              <p className="p-3 text-sm text-zinc-500">Nothing scheduled yet. Add an ambition, or set a deadline on a node.</p>
+              <p className="p-3 text-sm text-muted">Nothing scheduled yet. Add an ambition, or set a deadline on a node.</p>
             ) : (
               UP_BUCKETS.map((b) => {
                 const items = upcoming.filter((u) => bucketOf(u.dueT) === b);
@@ -1490,7 +1516,7 @@ export default function Timeline({
                   <div key={b} className="mb-3">
                     <div
                       className={`mb-1 px-1 text-[10px] font-medium uppercase tracking-wide ${
-                        b === "Overdue" ? "text-red-400" : "text-zinc-500"
+                        b === "Overdue" ? "text-oxblood" : "text-muted"
                       }`}
                     >
                       {b}
@@ -1499,24 +1525,24 @@ export default function Timeline({
                       <button
                         key={`${u.kind}-${u.id}`}
                         onClick={() => focusOn(u.id, u.goT, u.lane)}
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
                         title="Show on the timeline"
                       >
-                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: OXBLOOD }} />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm text-zinc-200">
-                            <span className={u.kind === "deadline" ? "text-red-400" : "text-blue-300"}>
+                          <span className="block truncate text-sm text-ink">
+                            <span className="text-oxblood">
                               {u.kind === "deadline" ? "⚑ " : "◯ "}
                             </span>
                             {u.label}
                           </span>
-                          <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                          <span className="block truncate text-[11px] text-muted">{u.project}</span>
                         </span>
                         <span className="shrink-0 text-right">
-                          <span className={`block text-[11px] ${u.dueT < todayMs ? "text-red-400" : "text-zinc-400"}`}>
+                          <span className={`block text-[11px] ${u.dueT < todayMs ? "text-oxblood" : "text-ink"}`}>
                             {fmtEU(u.dueT)}
                           </span>
-                          <span className="block text-[10px] text-zinc-600">{relLabel(u.dueT)}</span>
+                          <span className="block text-[10px] text-muted">{relLabel(u.dueT)}</span>
                         </span>
                       </button>
                     ))}
@@ -1538,7 +1564,7 @@ export default function Timeline({
             setSearchQuery("");
             setSearchOpen(true);
           }}
-          className="absolute left-3 top-2 z-30 flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-sm text-zinc-200 shadow backdrop-blur hover:bg-zinc-800"
+          className="absolute left-3 top-2 z-30 flex items-center gap-1.5 rounded-lg border border-hairline bg-paper-surface/90 px-3 py-1.5 text-sm text-ink shadow backdrop-blur hover:bg-paper-surface"
           title="Search projects and nodes (press Enter)"
         >
           🔍 Find
@@ -1547,8 +1573,8 @@ export default function Timeline({
 
       {/* Find: live search over projects then nodes — a popover at top-left, under Arrange */}
       {searchOpen && (
-        <div className="absolute left-3 top-2 z-40 w-72 rounded-lg border border-zinc-700 bg-zinc-950/95 shadow-xl backdrop-blur">
-          <div className="flex items-center gap-2 border-b border-zinc-800 px-2 py-1.5">
+        <div className="absolute left-3 top-2 z-40 w-72 rounded-lg border border-hairline bg-paper-surface/95 shadow-xl backdrop-blur">
+          <div className="flex items-center gap-2 border-b border-hairline px-2 py-1.5">
             <input
               autoFocus
               value={searchQuery}
@@ -1561,14 +1587,14 @@ export default function Timeline({
                 }
               }}
               placeholder="Search projects & nodes…"
-              className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1 text-sm text-ink outline-none focus:border-oxblood"
             />
             <button
               onClick={() => {
                 setSearchOpen(false);
                 setSearchQuery("");
               }}
-              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              className="rounded px-1.5 text-muted hover:bg-paper hover:text-ink"
               title="Close (Esc)"
             >
               ✕
@@ -1576,7 +1602,7 @@ export default function Timeline({
           </div>
           <div className="max-h-[60vh] overflow-auto p-2">
             {searchQuery.trim().length < 2 ? (
-              <p className="px-1 pt-1 text-xs text-zinc-500">Type at least 2 letters…</p>
+              <p className="px-1 pt-1 text-xs text-muted">Type at least 2 letters…</p>
             ) : (
               (() => {
                 const q = searchQuery.trim().toLowerCase();
@@ -1590,43 +1616,43 @@ export default function Timeline({
                 });
                 nodeHits.sort((a, b) => b.t - a.t);
                 if (projHits.length === 0 && nodeHits.length === 0)
-                  return <p className="px-1 pt-1 text-sm text-zinc-500">No matches.</p>;
+                  return <p className="px-1 pt-1 text-sm text-muted">No matches.</p>;
                 return (
                   <>
                     {projHits.length > 0 && (
                       <div className="mb-3">
-                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">Projects</div>
+                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-muted">Projects</div>
                         {projHits.map(({ p, lane }) => (
                           <button
                             key={p.id}
                             onClick={() => jumpToTime(p.nodes[0]?.t ?? nowMs, lane)}
-                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
                             title="Go to this project"
                           >
                             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: projColorOf(p) }} />
-                            <span className="truncate text-sm text-zinc-200">{p.name}</span>
+                            <span className="brand-serif truncate text-sm text-ink">{p.name}</span>
                           </button>
                         ))}
                       </div>
                     )}
                     {nodeHits.length > 0 && (
                       <div>
-                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">Nodes</div>
+                        <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-muted">Nodes</div>
                         {nodeHits.slice(0, 60).map((u) => (
                           <button
                             key={u.id}
                             onClick={() => focusOn(u.id, u.t, u.lane)}
-                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
                             title="Show on the timeline"
                           >
-                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: OXBLOOD }} />
                             <span className="min-w-0 flex-1">
-                              <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
+                              <span className={`block truncate text-sm ${u.done ? "text-muted line-through" : "text-ink"}`}>
                                 {u.label}
                               </span>
-                              <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                              <span className="block truncate text-[11px] text-muted">{u.project}</span>
                             </span>
-                            <span className="shrink-0 text-[11px] text-zinc-500">{fmtEU(u.t)}</span>
+                            <span className="shrink-0 text-[11px] text-muted">{fmtEU(u.t)}</span>
                           </button>
                         ))}
                       </div>
@@ -1641,14 +1667,14 @@ export default function Timeline({
 
       {/* Recent: nodes from the last 7 days */}
       {recentOpen && (
-        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
-          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
-            <span className="text-sm font-semibold text-zinc-100">
-              Recent <span className="ml-1 text-xs font-normal text-zinc-500">last 7 days</span>
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-hairline bg-paper-surface/95 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
+            <span className="brand-serif text-sm text-ink">
+              Recent <span className="ml-1 text-xs font-normal text-muted">last 7 days</span>
             </span>
             <button
               onClick={() => setRecentOpen(false)}
-              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              className="rounded px-1.5 text-muted hover:bg-paper hover:text-ink"
               title="Close"
             >
               ✕
@@ -1656,25 +1682,25 @@ export default function Timeline({
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {recent.length === 0 ? (
-              <p className="p-3 text-sm text-zinc-500">No nodes in the last 7 days.</p>
+              <p className="p-3 text-sm text-muted">No nodes in the last 7 days.</p>
             ) : (
               recent.map((u) => (
                 <button
                   key={u.id}
                   onClick={() => focusOn(u.id, u.t, u.lane)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
                   title="Show on the timeline"
                 >
-                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: OXBLOOD }} />
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
+                    <span className={`block truncate text-sm ${u.done ? "text-muted line-through" : "text-ink"}`}>
                       {u.label}
                     </span>
-                    <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                    <span className="block truncate text-[11px] text-muted">{u.project}</span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block text-[11px] text-zinc-400">{fmtEU(u.t)}</span>
-                    <span className="block text-[10px] text-zinc-600">{relLabel(u.t)}</span>
+                    <span className="block text-[11px] text-ink">{fmtEU(u.t)}</span>
+                    <span className="block text-[10px] text-muted">{relLabel(u.t)}</span>
                   </span>
                 </button>
               ))
@@ -1685,15 +1711,15 @@ export default function Timeline({
 
       {/* By tag: pick a tag, then see every node carrying it, newest first */}
       {tagFindOpen && (
-        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-zinc-800 bg-zinc-950/95 shadow-xl backdrop-blur">
-          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
-            <span className="text-sm font-semibold text-zinc-100">By tag</span>
+        <div className="absolute bottom-0 right-0 top-0 z-30 flex w-72 flex-col border-l border-hairline bg-paper-surface/95 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
+            <span className="brand-serif text-sm text-ink">By tag</span>
             <button
               onClick={() => {
                 setTagFindOpen(false);
                 setTagFindId(null);
               }}
-              className="rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              className="rounded px-1.5 text-muted hover:bg-paper hover:text-ink"
               title="Close"
             >
               ✕
@@ -1702,17 +1728,17 @@ export default function Timeline({
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {!tagFindId ? (
               <>
-                <p className="px-1 pb-2 text-xs text-zinc-500">Pick a tag to see everything it&apos;s on.</p>
-                {categories.length === 0 && <p className="px-1 text-xs text-zinc-500">No tags yet.</p>}
+                <p className="px-1 pb-2 text-xs text-muted">Pick a tag to see everything it&apos;s on.</p>
+                {categories.length === 0 && <p className="px-1 text-xs text-muted">No tags yet.</p>}
                 {categories.map((c) => (
                   <div key={c.id} className="mb-3">
-                    <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-zinc-500">{c.name}</div>
+                    <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                     <div className="flex flex-wrap gap-1 px-1">
                       {c.values.map((v) => (
                         <button
                           key={v.id}
                           onClick={() => setTagFindId(v.id)}
-                          className="rounded-full px-2 py-0.5 text-xs text-zinc-100"
+                          className="rounded-full px-2 py-0.5 text-xs text-ink"
                           style={{ border: `1px solid ${v.color}`, background: `${v.color}33` }}
                         >
                           {v.value}
@@ -1726,7 +1752,7 @@ export default function Timeline({
               (() => {
                 const tagVal = categories.flatMap((c) => c.values).find((v) => v.id === tagFindId);
                 const tagName = tagVal?.value ?? "tag";
-                const tagColor = tagVal?.color ?? tagColors[tagFindId] ?? "#a1a1aa";
+                const tagColor = tagVal?.color ?? tagColors[tagFindId] ?? MUTED;
                 const matches: {
                   id: string;
                   kind: "node" | "ambition";
@@ -1752,31 +1778,31 @@ export default function Timeline({
                       <span className="rounded-full px-2 py-0.5 text-xs text-white" style={{ background: tagColor }}>
                         {tagName}
                       </span>
-                      <button onClick={() => setTagFindId(null)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                      <button onClick={() => setTagFindId(null)} className="text-xs text-muted hover:text-ink">
                         Change tag
                       </button>
                     </div>
                     {matches.length === 0 ? (
-                      <p className="px-1 text-sm text-zinc-500">Nothing carries this tag yet.</p>
+                      <p className="px-1 text-sm text-muted">Nothing carries this tag yet.</p>
                     ) : (
                       matches.map((u) => (
                         <button
                           key={`${u.kind}-${u.id}`}
                           onClick={() => focusOn(u.id, u.t, u.lane)}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800"
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
                           title="Show on the timeline"
                         >
-                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(u.origin) }} />
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: OXBLOOD }} />
                           <span className="min-w-0 flex-1">
-                            <span className={`block truncate text-sm ${u.done ? "text-zinc-500 line-through" : "text-zinc-200"}`}>
-                              <span className="text-zinc-500">{u.kind === "ambition" ? "◯ " : "▢ "}</span>
+                            <span className={`block truncate text-sm ${u.done ? "text-muted line-through" : "text-ink"}`}>
+                              <span className="text-muted">{u.kind === "ambition" ? "◯ " : "▢ "}</span>
                               {u.label}
                             </span>
-                            <span className="block truncate text-[11px] text-zinc-500">{u.project}</span>
+                            <span className="block truncate text-[11px] text-muted">{u.project}</span>
                           </span>
                           <span className="shrink-0 text-right">
-                            <span className="block text-[11px] text-zinc-400">{fmtEU(u.t)}</span>
-                            <span className="block text-[10px] text-zinc-600">{relLabel(u.t)}</span>
+                            <span className="block text-[11px] text-ink">{fmtEU(u.t)}</span>
+                            <span className="block text-[10px] text-muted">{relLabel(u.t)}</span>
                           </span>
                         </button>
                       ))
@@ -1792,44 +1818,38 @@ export default function Timeline({
       {/* Legend / key (toggleable, bottom-left — offset right to clear the deploy badge) */}
       <div className="absolute bottom-6 left-20 z-30 flex flex-col items-start gap-2">
         {legendOpen && (
-          <div className="w-64 rounded-lg border border-zinc-800 bg-zinc-950/90 p-3 text-xs text-zinc-300 shadow-xl backdrop-blur">
-            <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-zinc-500">Key</div>
+          <div className="w-64 rounded-lg border border-hairline bg-paper-surface/95 p-3 text-xs text-ink shadow-xl backdrop-blur">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted">Key</div>
             <ul className="flex flex-col gap-2">
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} />
+                  <rect x="1" y="1" width="16" height="16" rx="3" fill={NODE_FILL} stroke={OXBLOOD} strokeWidth="1.25" />
                 </svg>
-                <span>Event from Gmail</span>
+                <span>Event (a node)</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <rect x="1" y="1" width="16" height="16" rx="4" fill={MANUAL_COLOR} />
-                </svg>
-                <span>Event you added</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <svg width="20" height="18" aria-hidden>
-                  <rect x="1" y="1" width="16" height="16" rx="4" fill="#6b7280" />
+                  <rect x="1" y="1" width="16" height="16" rx="3" fill={NODE_FILL} stroke={OXBLOOD} strokeWidth="1.25" opacity="0.4" />
                 </svg>
                 <span>Done</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} />
-                  <rect x="1" y="1" width="6" height="16" rx="4" fill="#ef4444" />
+                  <rect x="1" y="1" width="16" height="16" rx="3" fill={NODE_FILL} stroke={OXBLOOD} strokeWidth="1.25" />
+                  <rect x="1.6" y="1.6" width="6" height="14.8" fill={OXBLOOD} fillOpacity="0.85" />
                 </svg>
-                <span>Deadline — fills red as it nears</span>
+                <span>Deadline — fills as it nears</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <circle cx="9" cy="9" r="7" fill="none" stroke="#e4e4e7" strokeWidth="1.5" strokeDasharray="3 2" />
+                  <circle cx="9" cy="9" r="7" fill={NODE_FILL} stroke={OXBLOOD} strokeWidth="1.25" strokeDasharray="3 2" />
                 </svg>
                 <span>Ambition (future) — click to tick off</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <rect x="1" y="1" width="16" height="16" rx="4" fill={GMAIL_COLOR} stroke="#0a0a0a" strokeWidth="1.5" />
-                  <text x="9" y="13" fill="#fff" fontSize="11" fontWeight="700" textAnchor="middle">
+                  <rect x="1" y="1" width="16" height="16" rx="3" fill={NODE_FILL} stroke={OXBLOOD} strokeWidth="1.5" />
+                  <text x="9" y="13" fill={OXBLOOD} fontSize="11" fontWeight="500" textAnchor="middle" fontFamily="Georgia, serif">
                     3
                   </text>
                 </svg>
@@ -1837,28 +1857,27 @@ export default function Timeline({
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <circle cx="6" cy="9" r="3.5" fill="#ef4444" />
+                  <circle cx="6" cy="9" r="3.5" fill={OXBLOOD} />
                   <circle cx="15" cy="9" r="3.5" fill="#22c55e" />
                 </svg>
                 <span>Corner dots: deadline inside / some done</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <line x1="1" y1="6" x2="19" y2="6" stroke="#3f3f46" strokeWidth="1" />
-                  <line x1="1" y1="13" x2="19" y2="13" stroke={GMAIL_COLOR} strokeWidth="2.5" />
+                  <line x1="1" y1="9" x2="19" y2="9" stroke={OXBLOOD} strokeOpacity="0.45" strokeWidth="2" />
                 </svg>
-                <span>Wire thickens &amp; colours as you zoom out</span>
+                <span>Wire between nodes (thickens as you zoom out)</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" aria-hidden>
-                  <rect x="2" y="3" width="16" height="12" rx="2" fill="#fef08a" stroke="#d97706" />
+                  <rect x="2" y="3" width="16" height="12" rx="2" fill={NOTE_FILL} stroke={NOTE_BORDER} />
                 </svg>
                 <span>Note — drag to move, click to edit</span>
               </li>
               <li className="flex items-center gap-2">
                 <svg width="20" height="18" viewBox="0 0 24 24" aria-hidden>
-                  <rect x="5" y="5" width="2.4" height="14" rx="1" fill="#a1a1aa" />
-                  <path d="M20 5 L9 12 L20 19 Z" fill="#a1a1aa" />
+                  <rect x="5" y="5" width="2.4" height="14" rx="1" fill={MUTED} />
+                  <path d="M20 5 L9 12 L20 19 Z" fill={MUTED} />
                 </svg>
                 <span>Jump to a project&apos;s start</span>
               </li>
@@ -1867,7 +1886,7 @@ export default function Timeline({
         )}
         <button
           onClick={() => setLegendOpen((v) => !v)}
-          className="rounded-lg border border-zinc-800 bg-zinc-950/80 px-2.5 py-1 text-sm text-zinc-200 backdrop-blur hover:bg-zinc-800"
+          className="rounded-lg border border-hairline bg-paper-surface/90 px-2.5 py-1 text-sm text-ink backdrop-blur hover:bg-paper-surface"
         >
           {legendOpen ? "Hide key" : "Key"}
         </button>
@@ -1875,15 +1894,15 @@ export default function Timeline({
 
       {/* Floating controls */}
       <div className="absolute bottom-6 right-4 flex flex-col items-end gap-2">
-        <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950/80 p-1 backdrop-blur">
-          <span className="px-1 text-xs text-zinc-500">Span</span>
+        <div className="flex items-center gap-1 rounded-lg border border-hairline bg-paper-surface/90 p-1 backdrop-blur">
+          <span className="px-1 text-xs text-muted">Span</span>
           {ZOOMS.map((z) => (
             <button key={z.days} className={zoomBtn(daysPerScreen === z.days)} onClick={() => zoomTo(z.days)}>
               {z.label}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950/80 p-1 backdrop-blur">
+        <div className="flex items-center gap-1 rounded-lg border border-hairline bg-paper-surface/90 p-1 backdrop-blur">
           <button className={btn} onClick={loadEarlier} title="Load 2 earlier months">
             ‹ Earlier
           </button>
@@ -1898,36 +1917,36 @@ export default function Timeline({
 
       {/* Add node / ambition modal */}
       {addTo && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setAddTo(null)}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setAddTo(null)}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={submitAdd} className={card}>
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">
+            <h2 className="brand-serif mb-1 text-lg text-oxblood">
               Add {addTo.mode === "ambition" ? "an ambition" : "a node"} to {addTo.projectName}
             </h2>
-            <p className="mb-4 text-sm text-zinc-400">
+            <p className="mb-4 text-sm text-muted">
               {addTo.mode === "ambition"
                 ? "Something planned — pick a future date."
                 : "A past event — pick any date from the last node up to today."}
             </p>
 
-            <label className="mb-1 block text-sm text-zinc-300">Title</label>
+            <label className="mb-1 block text-sm text-ink">Title</label>
             <input
               autoFocus
               value={addTitle}
               onChange={(e) => setAddTitle(e.target.value)}
               placeholder="e.g. Kickoff meeting"
-              className="mb-4 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className="mb-4 w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood"
             />
 
-            <label className="mb-1 block text-sm text-zinc-300">Date</label>
+            <label className="mb-1 block text-sm text-ink">Date</label>
             <MiniCalendar
               value={addDate}
               onChange={setAddDate}
               minDate={addTo.mode === "ambition" ? isoFromMs(Date.now() + DAY) : addTo.minDate || undefined}
               maxDate={addTo.mode === "node" ? todayIso() : undefined}
             />
-            <p className="mb-2 mt-1 text-xs text-zinc-500">Selected: {fmtEU(addDate)}</p>
+            <p className="mb-2 mt-1 text-xs text-muted">Selected: {fmtEU(addDate)}</p>
             {addTo.mode === "ambition" && (
-              <label className="mb-5 flex items-center gap-2 text-sm text-zinc-300">
+              <label className="mb-5 flex items-center gap-2 text-sm text-ink">
                 <input type="checkbox" checked={addAsDeadline} onChange={(e) => setAddAsDeadline(e.target.checked)} />
                 Also set as a deadline (red countdown to the date)
               </label>
@@ -1947,10 +1966,10 @@ export default function Timeline({
 
       {/* Choose what to add: note or ambition */}
       {addChoice && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => setAddChoice(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">Add to {addChoice.projectName}</h2>
-            <p className="mb-4 text-sm text-zinc-400">What would you like to add?</p>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setAddChoice(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl">
+            <h2 className="brand-serif mb-1 text-lg text-oxblood">Add to {addChoice.projectName}</h2>
+            <p className="mb-4 text-sm text-muted">What would you like to add?</p>
             <div className="flex flex-col gap-2">
               {(addChoice.minDate === "" || addChoice.minDate < todayIso()) && (
                 <button
@@ -1959,9 +1978,9 @@ export default function Timeline({
                     setAddChoice(null);
                     openAdd(c.projectId, c.projectName, c.minDate, "node");
                   }}
-                  className="rounded-md border border-zinc-500 bg-zinc-800 px-4 py-3 text-left text-sm font-medium text-zinc-100 hover:bg-zinc-700"
+                  className="rounded-md border border-hairline bg-paper px-4 py-3 text-left text-sm font-medium text-ink hover:bg-paper-surface"
                 >
-                  ▢ Node <span className="font-normal text-zinc-400">— a past event (up to today)</span>
+                  ▢ Node <span className="font-normal text-muted">— a past event (up to today)</span>
                 </button>
               )}
               <button
@@ -1970,9 +1989,9 @@ export default function Timeline({
                   setAddChoice(null);
                   openAdd(c.projectId, c.projectName, c.minDate, "ambition");
                 }}
-                className="rounded-md border border-blue-400 bg-blue-600 px-4 py-3 text-left text-sm font-medium text-white hover:bg-blue-500"
+                className="rounded-md border border-oxblood bg-paper px-4 py-3 text-left text-sm font-medium text-oxblood hover:bg-paper-surface"
               >
-                ◯ Ambition <span className="font-normal text-blue-100">— something planned (future)</span>
+                ◯ Ambition <span className="font-normal text-muted">— something planned (future)</span>
               </button>
               <button
                 onClick={() => {
@@ -1984,9 +2003,10 @@ export default function Timeline({
                   setNoteBody("");
                   setAddChoice(null);
                 }}
-                className="rounded-md border border-amber-500/70 bg-amber-100 px-4 py-3 text-left text-sm font-medium text-amber-950 hover:bg-amber-200"
+                className="rounded-md px-4 py-3 text-left text-sm font-medium text-ink"
+                style={{ background: NOTE_FILL, border: `1px solid ${NOTE_BORDER}` }}
               >
-                📝 Note <span className="font-normal text-amber-800">— a sticky reminder</span>
+                📝 Note <span className="font-normal text-muted">— a sticky reminder</span>
               </button>
             </div>
           </div>
@@ -1995,18 +2015,18 @@ export default function Timeline({
 
       {/* Compose a note */}
       {noteCompose && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNoteCompose(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">New note</h2>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setNoteCompose(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl">
+            <h2 className="brand-serif mb-3 text-lg text-oxblood">New note</h2>
             <textarea
               autoFocus
               value={noteBody}
               onChange={(e) => setNoteBody(e.target.value)}
               placeholder="Write a note…"
               rows={4}
-              className="mb-3 w-full resize-none rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className="mb-3 w-full resize-none rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood"
             />
-            <p className="mb-4 text-xs text-zinc-500">
+            <p className="mb-4 text-xs text-muted">
               It&apos;ll appear by the latest node, linked by a dotted line — then drag it anywhere.
             </p>
             <div className="flex justify-end gap-2">
@@ -2023,10 +2043,10 @@ export default function Timeline({
 
       {/* Cluster list: the items collapsed under a count marker */}
       {clusterMenu && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => setClusterMenu(null)}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setClusterMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-1 text-lg font-semibold text-zinc-100">{clusterMenu.items.length} items</h2>
-            <p className="mb-4 text-sm text-zinc-400">{clusterMenu.projectName} · same stretch of time</p>
+            <h2 className="brand-serif mb-1 text-lg text-oxblood">{clusterMenu.items.length} items</h2>
+            <p className="mb-4 text-sm text-muted">{clusterMenu.projectName} · same stretch of time</p>
             <div className="flex max-h-[50vh] flex-col gap-1 overflow-auto">
               {clusterMenu.items.map((it) => (
                 <button
@@ -2051,13 +2071,13 @@ export default function Timeline({
                       });
                     }
                   }}
-                  className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+                  className="flex items-center justify-between gap-3 rounded-md border border-hairline bg-paper px-3 py-2 text-left text-sm text-ink hover:bg-paper-surface"
                 >
                   <span className="truncate">
                     {it.kind === "ambition" ? "◯ " : ""}
                     {it.label}
                   </span>
-                  <span className="shrink-0 text-xs text-zinc-500">
+                  <span className="shrink-0 text-xs text-muted">
                     {fmtEU(it.t)}
                     {it.done ? " ✓" : ""}
                   </span>
@@ -2075,21 +2095,21 @@ export default function Timeline({
 
       {/* Node actions */}
       {nodeMenu && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setNodeMenu(null)}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setNodeMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Node</h2>
+            <h2 className="brand-serif mb-3 text-lg text-oxblood">Node</h2>
 
-            <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Title</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Title</label>
             <input
               value={editLabel}
               onChange={(e) => setEditLabel(e.target.value)}
-              className="mb-3 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className="mb-3 w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood"
             />
             {nodeMenu.origin === "manual" ? (
               <div className="mb-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-300">Date: {fmtEU(editDate)}</span>
-                  <button onClick={() => setEditDateOpen((v) => !v)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                  <span className="text-sm text-ink">Date: {fmtEU(editDate)}</span>
+                  <button onClick={() => setEditDateOpen((v) => !v)} className="text-xs text-muted hover:text-ink">
                     {editDateOpen ? "Hide" : "Change"}
                   </button>
                 </div>
@@ -2100,17 +2120,17 @@ export default function Timeline({
                 )}
               </div>
             ) : (
-              <p className="mb-3 text-xs text-zinc-500">Date comes from the email and isn&apos;t editable here.</p>
+              <p className="mb-3 text-xs text-muted">Date comes from the email and isn&apos;t editable here.</p>
             )}
             <button onClick={saveNodeEdits} disabled={busy} className={`${primary} mb-5 w-full`}>
               {busy ? "Saving…" : "Save title / date"}
             </button>
 
-            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Deadline</p>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted">Deadline</p>
             <div className="mb-4">
               {nodeMenu.deadline ? (
                 <div className="flex flex-col gap-2">
-                  <p className="text-sm text-zinc-300">
+                  <p className="text-sm text-ink">
                     {nodeMenu.done ? "Completed ✓" : `Due ${fmtEU(nodeMenu.deadline)}`}
                   </p>
                   <div className="flex gap-2">
@@ -2129,7 +2149,7 @@ export default function Timeline({
               ) : nodeCalOpen ? (
                 <div>
                   <MiniCalendar value={nodeCalDate} onChange={setNodeCalDate} />
-                  <p className="mt-1 text-xs text-zinc-500">Due {fmtEU(nodeCalDate)}</p>
+                  <p className="mt-1 text-xs text-muted">Due {fmtEU(nodeCalDate)}</p>
                   <div className="mt-2 flex gap-2">
                     <button onClick={() => setNodeCalOpen(false)} disabled={busy} className={ghost}>
                       Cancel
@@ -2152,12 +2172,12 @@ export default function Timeline({
               )}
             </div>
 
-            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tags</p>
             <div className="mb-5">
-              {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+              {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
               {categories.map((c) => (
                 <div key={c.id} className="mb-2">
-                  <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                   <div className="flex flex-wrap gap-1">
                     {c.values.map((v) => {
                       const cur = nodeTagOverride[nodeMenu.id] ?? nodeMenu.tags;
@@ -2169,7 +2189,7 @@ export default function Timeline({
                           className="rounded-full px-2 py-0.5 text-xs"
                           style={{
                             background: on ? v.color : "transparent",
-                            color: on ? "#fff" : "#d4d4d8",
+                            color: on ? "#fff" : INK,
                             border: `1px solid ${v.color}`,
                           }}
                         >
@@ -2196,20 +2216,20 @@ export default function Timeline({
 
       {/* Ambition actions */}
       {ambMenu && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && setAmbMenu(null)}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setAmbMenu(null)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Ambition</h2>
+            <h2 className="brand-serif mb-3 text-lg text-oxblood">Ambition</h2>
 
-            <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Title</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Title</label>
             <input
               value={ambEditTitle}
               onChange={(e) => setAmbEditTitle(e.target.value)}
-              className="mb-3 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className="mb-3 w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood"
             />
             <div className="mb-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">Target: {fmtEU(ambEditDate)}</span>
-                <button onClick={() => setAmbEditDateOpen((v) => !v)} className="text-xs text-zinc-400 hover:text-zinc-200">
+                <span className="text-sm text-ink">Target: {fmtEU(ambEditDate)}</span>
+                <button onClick={() => setAmbEditDateOpen((v) => !v)} className="text-xs text-muted hover:text-ink">
                   {ambEditDateOpen ? "Hide" : "Change"}
                 </button>
               </div>
@@ -2219,7 +2239,7 @@ export default function Timeline({
                 </div>
               )}
             </div>
-            <label className="mb-4 flex items-center gap-2 text-sm text-zinc-300">
+            <label className="mb-4 flex items-center gap-2 text-sm text-ink">
               <input type="checkbox" checked={ambEditDeadline} onChange={(e) => setAmbEditDeadline(e.target.checked)} />
               Treat as a deadline (red countdown to the date)
             </label>
@@ -2227,12 +2247,12 @@ export default function Timeline({
               {busy ? "Saving…" : "Save changes"}
             </button>
 
-            <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tags</p>
             <div className="mb-5">
-              {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+              {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
               {categories.map((c) => (
                 <div key={c.id} className="mb-2">
-                  <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                   <div className="flex flex-wrap gap-1">
                     {c.values.map((v) => {
                       const cur = ambTagOverride[ambMenu.id] ?? ambMenu.tags;
@@ -2242,7 +2262,7 @@ export default function Timeline({
                           key={v.id}
                           onClick={() => applyAmbTag(ambMenu.id, v.id, cur)}
                           className="rounded-full px-2 py-0.5 text-xs"
-                          style={{ background: on ? v.color : "transparent", color: on ? "#fff" : "#d4d4d8", border: `1px solid ${v.color}` }}
+                          style={{ background: on ? v.color : "transparent", color: on ? "#fff" : INK, border: `1px solid ${v.color}` }}
                         >
                           {v.value}
                         </button>
@@ -2279,17 +2299,17 @@ export default function Timeline({
 
       {/* Project actions */}
       {projMenu && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && closeProj()}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && closeProj()}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
             {!projConfirm ? (
               <>
-                <h2 className="mb-1 text-lg font-semibold text-zinc-100">{projMenu.name}</h2>
-                <p className="mb-4 text-sm text-zinc-400">
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">{projMenu.name}</h2>
+                <p className="mb-4 text-sm text-muted">
                   {projMenu.nodeCount} node{projMenu.nodeCount === 1 ? "" : "s"} ·{" "}
                   {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
                 </p>
 
-                <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Colour</p>
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Colour</p>
                 <div className="mb-5 flex flex-wrap items-center gap-2">
                   {(() => {
                     const cur = projMenu.id in projColorOverride ? projColorOverride[projMenu.id] : projMenu.color;
@@ -2299,16 +2319,16 @@ export default function Timeline({
                           <button
                             key={c}
                             onClick={() => applyProjColor(projMenu.id, c)}
-                            className={`h-6 w-6 rounded-full border-2 ${cur === c ? "border-white" : "border-transparent"}`}
+                            className={`h-6 w-6 rounded-full border-2 ${cur === c ? "border-oxblood" : "border-transparent"}`}
                             style={{ background: c }}
                             title={`Set ${c}`}
                           />
                         ))}
                         <button
                           onClick={() => applyProjColor(projMenu.id, null)}
-                          title="Use the default (green for Gmail, blue for manual)"
+                          title="Use the default project colour"
                           className={`rounded-full border px-2 py-0.5 text-xs ${
-                            cur ? "border-zinc-600 text-zinc-300 hover:bg-zinc-800" : "border-white text-white"
+                            cur ? "border-hairline text-ink hover:bg-paper" : "border-oxblood text-oxblood"
                           }`}
                         >
                           Default
@@ -2318,12 +2338,12 @@ export default function Timeline({
                   })()}
                 </div>
 
-                <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">Tags</p>
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tags</p>
                 <div className="mb-5">
-                  {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+                  {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
                   {categories.map((c) => (
                     <div key={c.id} className="mb-2">
-                      <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{c.name}</div>
+                      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                       <div className="flex flex-wrap gap-1">
                         {c.values.map((v) => {
                           const cur = projTagOverride[projMenu.id] ?? projMenu.tags;
@@ -2335,7 +2355,7 @@ export default function Timeline({
                               className="rounded-full px-2 py-0.5 text-xs"
                               style={{
                                 background: on ? v.color : "transparent",
-                                color: on ? "#fff" : "#d4d4d8",
+                                color: on ? "#fff" : INK,
                                 border: `1px solid ${v.color}`,
                               }}
                             >
@@ -2355,15 +2375,15 @@ export default function Timeline({
                   <button onClick={() => setProjConfirm(true)} disabled={busy} className={danger}>
                     Delete permanently…
                   </button>
-                  <button onClick={closeProj} disabled={busy} className="mt-1 text-sm text-zinc-500 hover:text-zinc-300">
+                  <button onClick={closeProj} disabled={busy} className="mt-1 text-sm text-muted hover:text-ink">
                     Cancel
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <h2 className="mb-1 text-lg font-semibold text-zinc-100">Delete {projMenu.name}?</h2>
-                <p className="mb-5 text-sm text-zinc-400">
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">Delete {projMenu.name}?</h2>
+                <p className="mb-5 text-sm text-muted">
                   This permanently removes the project and its {projMenu.nodeCount} node
                   {projMenu.nodeCount === 1 ? "" : "s"} and {projMenu.ambitionCount} ambition
                   {projMenu.ambitionCount === 1 ? "" : "s"}. Gmail is never touched. This can&apos;t be undone.

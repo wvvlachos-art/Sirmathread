@@ -15,13 +15,13 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-zinc-950 px-6 text-center">
-      <h1 className="text-4xl font-semibold tracking-tight text-zinc-50">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-paper px-6 text-center text-ink">
+      <h1 className="brand-serif text-4xl text-oxblood">
         Sign in to Sirmathread
       </h1>
       <button
         onClick={handleGoogleSignIn}
-        className="rounded-full bg-zinc-50 px-6 py-3 text-base font-medium text-zinc-900 transition-colors hover:bg-zinc-200"
+        className="rounded-full bg-oxblood px-6 py-3 text-base font-medium text-paper transition-colors hover:bg-oxblood-dark"
       >
         Continue with Google
       </button>

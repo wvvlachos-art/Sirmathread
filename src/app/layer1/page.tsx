@@ -104,9 +104,9 @@ export default async function Layer1Page({
 
   if (error) {
     return (
-      <main className="flex h-screen flex-col items-center justify-center gap-3 bg-zinc-950 p-10 text-center text-zinc-300">
+      <main className="flex h-screen flex-col items-center justify-center gap-3 bg-paper p-10 text-center text-ink">
         <p className="text-lg font-medium">Couldn&apos;t load your projects.</p>
-        <p className="max-w-md text-sm text-zinc-500">
+        <p className="max-w-md text-sm text-muted">
           A database update may still be pending. Details: {error.message}
         </p>
       </main>
@@ -293,19 +293,19 @@ export default async function Layer1Page({
   }));
 
   return (
-    <main className="flex h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
+    <main className="flex h-screen flex-col bg-paper text-ink">
+      <header className="flex items-center justify-between border-b border-hairline bg-paper-surface px-6 py-3">
         <div className="flex items-baseline gap-3">
-          <Link href="/" className="text-lg font-semibold tracking-tight">
+          <Link href="/" className="brand-serif text-xl text-oxblood">
             Sirmathread
           </Link>
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-muted">
             Overview · {lanes.length} project{lanes.length === 1 ? "" : "s"}
           </span>
         </div>
         <div className="flex items-center gap-4">
           <NewProjectButton />
-          <span className="text-sm text-zinc-400">{user.email}</span>
+          <span className="text-sm text-muted">{user.email}</span>
           <SignOutButton />
         </div>
       </header>
@@ -314,7 +314,7 @@ export default async function Layer1Page({
         <Toolbar categories={tagCatalog} hiddenCount={universe.length - lanes.length} />
 
         {lanes.length === 0 ? (
-          <div className="p-10 text-zinc-400">No projects match the current filters.</div>
+          <div className="p-10 text-muted">No projects match the current filters.</div>
         ) : (
           <Timeline
             lanes={lanes}

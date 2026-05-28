@@ -195,9 +195,9 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
     .sort((a, b) => (filterCounts[b.id] ?? 0) - (filterCounts[a.id] ?? 0))
     .slice(0, 2);
 
-  const selectCls = "rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200";
-  const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4";
-  const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
+  const selectCls = "rounded-md border border-hairline bg-paper px-2 py-1 text-sm text-ink hover:bg-paper-surface";
+  const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4";
+  const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl";
 
   const chip = (o: FilterOpt, removable: boolean) => (
     <button
@@ -206,9 +206,9 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
       title={removable ? "Remove filter" : o.isActive ? "Active — click to remove" : "Apply filter"}
       className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
       style={{
-        background: o.isActive ? o.color ?? "#3f3f46" : "transparent",
-        color: o.isActive ? "#fff" : "#d4d4d8",
-        border: `1px solid ${o.color ?? "#52525b"}`,
+        background: o.isActive ? o.color ?? "var(--ink)" : "transparent",
+        color: o.isActive ? "#fff" : "var(--ink)",
+        border: `1px solid ${o.color ?? "var(--hairline)"}`,
       }}
     >
       {o.label}
@@ -217,10 +217,10 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-zinc-800 px-6 py-2.5">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-hairline bg-paper-surface px-6 py-2.5">
       {/* Arrange */}
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Arrange</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Arrange</span>
         <select
           className={selectCls}
           value={sort}
@@ -238,7 +238,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
         </select>
         <button
           onClick={() => update({ dir: dir === "asc" ? "desc" : "asc" })}
-          className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 hover:bg-zinc-800"
+          className={selectCls}
           title={dir === "asc" ? "Ascending" : "Descending"}
         >
           {dir === "asc" ? "↑" : "↓"}
@@ -247,7 +247,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
 
       {/* Filters: button + quick-select + active chips */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Filter</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Filter</span>
         <button onClick={() => setFiltersOpen(true)} className={selectCls}>
           Filters{activeOpts.length ? ` (${activeOpts.length})` : ""} ▾
         </button>
@@ -257,7 +257,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
           <button
             onClick={clearFilters}
             title="Clear all filters"
-            className="rounded-md border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm text-zinc-200 hover:bg-zinc-700"
+            className={selectCls}
           >
             Clear ✕
           </button>
@@ -266,13 +266,13 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
         {/* quick-select: your most-used filters */}
         {quickOpts.length > 0 && (
           <>
-            <span className="text-[10px] uppercase tracking-wide text-zinc-600">Quick</span>
+            <span className="text-[10px] uppercase tracking-wide text-muted">Quick</span>
             {quickOpts.map((o) => chip(o, false))}
           </>
         )}
 
         {/* active filters as removable chips */}
-        {activeOpts.length > 0 && <span className="text-zinc-700">|</span>}
+        {activeOpts.length > 0 && <span className="text-hairline">|</span>}
         {activeOpts.map((o) => chip(o, true))}
 
         {/* how many projects are currently held back, with a one-click escape hatch */}
@@ -280,7 +280,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
           <button
             onClick={showEverything}
             title="Some projects are hidden by the current filters (including archived and spam/low-priority). Click to show every project."
-            className="flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/25"
+            className="flex items-center gap-1 rounded-full border border-oxblood/60 bg-oxblood/10 px-2 py-0.5 text-xs text-oxblood hover:bg-oxblood/20"
           >
             {hiddenCount} hidden <span className="font-medium underline">show all</span>
           </button>
@@ -289,7 +289,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
 
       {/* Tags: manage + magic wand */}
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Tags</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Tags</span>
         <button onClick={() => setManageOpen(true)} className={selectCls}>
           Manage
         </button>
@@ -297,7 +297,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
           onClick={() => (armed ? setArmed(null) : setWandOpen(true))}
           title={armed ? "Put the wand down (Esc)" : "Magic wand — stamp a tag onto things"}
           className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm ${
-            armed ? "border-blue-400 bg-blue-600 text-white" : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+            armed ? "border-oxblood bg-oxblood text-paper" : "border-hairline bg-paper text-ink hover:bg-paper-surface"
           }`}
         >
           <WandIcon />
@@ -309,18 +309,18 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
       {filtersOpen && (
         <div className={overlay} onClick={() => setFiltersOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Filters</h2>
+            <h2 className="brand-serif mb-3 text-lg text-oxblood">Filters</h2>
 
             <div className="mb-4">
-              <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Status &amp; deadline</div>
+              <div className="mb-2 text-[10px] uppercase tracking-wide text-muted">Status &amp; deadline</div>
               <div className="flex flex-wrap gap-1">{flagOpts.map((o) => chip(o, false))}</div>
             </div>
 
-            <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Tags</div>
-            {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+            <div className="mb-2 text-[10px] uppercase tracking-wide text-muted">Tags</div>
+            {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
             {categories.map((c) => (
               <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
                   {c.name}
                   {c.isHide ? " · hidden by default" : ""}
                 </div>
@@ -333,21 +333,21 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
               </div>
             ))}
             {hasHide && (
-              <label className="mt-1 flex items-center gap-1.5 text-sm text-zinc-300">
+              <label className="mt-1 flex items-center gap-1.5 text-sm text-ink">
                 <input type="checkbox" checked={showHidden} onChange={(e) => update({ show_hidden: e.target.checked ? "1" : null })} />
                 Show spam / low-priority
               </label>
             )}
 
-            <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-hairline pt-4">
               <button
                 onClick={clearFilters}
                 title="Clear every filter back to the default view"
-                className="rounded-md border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700"
+                className="rounded-md border border-hairline bg-paper px-3 py-2 text-sm font-medium text-ink hover:bg-paper-surface"
               >
                 Clear all filters
               </button>
-              <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
+              <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-oxblood px-4 py-2 text-sm font-medium text-paper hover:bg-oxblood-dark">
                 Done
               </button>
             </div>
@@ -359,14 +359,14 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
       {wandOpen && !armed && (
         <div className={overlay} onClick={() => setWandOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-1 flex items-center gap-2 text-lg font-semibold text-zinc-100">
+            <h2 className="brand-serif mb-1 flex items-center gap-2 text-lg text-oxblood">
               <WandIcon size={18} /> Magic wand
             </h2>
-            <p className="mb-3 text-sm text-zinc-400">Load a tag, then click nodes/projects to stamp it on. Esc to stop.</p>
-            {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+            <p className="mb-3 text-sm text-muted">Load a tag, then click nodes/projects to stamp it on. Esc to stop.</p>
+            {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
             {categories.map((c) => (
               <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">{c.name}</div>
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                 <div className="flex flex-wrap gap-1">
                   {c.values.map((v) => (
                     <button
@@ -375,7 +375,7 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
                         setArmed({ id: v.id, value: v.value, color: v.color });
                         setWandOpen(false);
                       }}
-                      className="rounded-full px-2 py-0.5 text-xs text-zinc-100"
+                      className="rounded-full px-2 py-0.5 text-xs text-ink"
                       style={{ border: `1px solid ${v.color}`, background: `${v.color}33` }}
                     >
                       {v.value}

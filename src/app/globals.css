@@ -1,28 +1,55 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Kraft & oxblood — locked 2026-05-28.
+   Single source of truth for theme colour tokens. SVG/inline JS reads the
+   matching values from src/lib/theme.ts (kept in sync with these by hand).
+   --------------------------------------------------------------------------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #e7dcc4;          /* app canvas background */
+  --paper-surface: #ede4d0;  /* panels, toolbar, cards */
+  --node-fill: #f7eed9;      /* default (untagged) node fill */
+  --oxblood: #7a2718;        /* signature accent */
+  --oxblood-dark: #5e1d12;   /* hover/darker */
+  --ink: #4d4327;            /* primary text on paper */
+  --muted: #8f7f5b;          /* secondary text */
+  --hairline: #cbbb96;       /* 1px borders/separators */
+  --note-fill: #f2e4a8;      /* sticky-note fill */
+  --note-border: #cdb858;    /* sticky-note border */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: var(--paper);
+  --color-paper-surface: var(--paper-surface);
+  --color-node-fill: var(--node-fill);
+  --color-oxblood: var(--oxblood);
+  --color-oxblood-dark: var(--oxblood-dark);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-hairline: var(--hairline);
+  --color-note-fill: var(--note-fill);
+  --color-note-border: var(--note-border);
+
+  --font-serif: Georgia, "Iowan Old Style", "Hoefler Text", Cambria, "Times New Roman", serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
+
+/* Brand + project names lean serif with a touch of negative tracking. */
+.brand-serif {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.2px;
 }
 
 /* Tags fade + pop in when added. */
