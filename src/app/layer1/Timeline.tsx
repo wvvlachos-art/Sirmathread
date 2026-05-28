@@ -16,6 +16,7 @@ import {
   toggleNodeTag,
   toggleAmbitionTag,
   setProjectColor,
+  setProjectSpineColor,
   setNodeDeadline,
   clearNodeDeadline,
   setNodeDone,
@@ -36,6 +37,16 @@ import {
   PAPER_SURFACE,
   NOTE_FILL,
   NOTE_BORDER,
+  AXIS_BG,
+  AXIS_INK,
+  AXIS_YEAR,
+  AXIS_RULE,
+  PILL_EDGE,
+  PILL_INK,
+  SPINE_PALETTE,
+  ATTENTION_ALERT,
+  ATTENTION_NORMAL,
+  ATTENTION_INACTIVE,
 } from "@/lib/theme";
 
 type TagCat = {
@@ -57,11 +68,16 @@ type LaneNode = {
 };
 type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number; tags: string[] };
 type Note = { id: string; body: string; x: number; y: number; anchorT: number };
+type Attention = "inactive" | "alert" | "normal";
 type Lane = {
   id: string;
   name: string;
   origin: string;
   color: string | null;
+  spineColor: string | null;
+  spineUserSet: boolean;
+  attention: Attention;
+  lastActivityAt: string | null;
   archived: boolean;
   inactive: boolean;
   nodes: LaneNode[];
@@ -82,13 +98,26 @@ const DAY = 86_400_000;
 const NODE = 48;
 const AMB_R = 22;
 const AXIS_H = 46;
-const LABEL_W = 220;
+// Widened to fit the enriched left-rail content (spine + name + pills + meta).
+const LABEL_W = 244;
 const LANES_PER_SCREEN = 5;
 const MIN_LANE_H = 120;
 const CHUNK_DAYS = 60;
 const MAX_SPAN_DAYS = 5 * 365;
 const INITIAL_BACK = 120;
 const INITIAL_FWD = 60;
+
+// Compact relative time for the meta line under the project name.
+function relTimeAgo(iso: string | null, nowMs: number): string {
+  if (!iso) return "—";
+  const days = Math.floor((nowMs - new Date(iso).getTime()) / DAY);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
 
 const ZOOMS = [
   { days: 7, label: "1w" },
@@ -414,6 +443,8 @@ export default function Timeline({
       archived: boolean;
       tags: string[];
       color: string | null;
+      spineColor: string | null;
+      spineUserSet: boolean;
     } | null
   >(null);
   const [projConfirm, setProjConfirm] = useState(false);
@@ -422,6 +453,7 @@ export default function Timeline({
   const [projTagOverride, setProjTagOverride] = useState<Record<string, string[]>>({});
   const [ambTagOverride, setAmbTagOverride] = useState<Record<string, string[]>>({});
   const [projColorOverride, setProjColorOverride] = useState<Record<string, string | null>>({});
+  const [spineColorOverride, setSpineColorOverride] = useState<Record<string, { color: string | null; userSet: boolean }>>({});
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -865,9 +897,36 @@ export default function Timeline({
       if (res?.error) alert("Could not set colour: " + res.error);
     });
   };
+  // Spine colour override. Null = ask the server to auto-pick from the palette
+  // by re-running the creation-order rule; userSet is reported back so we
+  // know whether to render the "auto" or "custom" hint in the picker.
+  const applySpineColor = (id: string, color: string | null) => {
+    setSpineColorOverride((prev) => ({
+      ...prev,
+      [id]: { color, userSet: color !== null },
+    }));
+    setProjectSpineColor(id, color).then((res) => {
+      if (res?.error) alert("Could not set spine colour: " + res.error);
+    });
+  };
+  // Current spine colour for a lane, respecting any optimistic override.
+  const spineColorOf = (p: Lane): string => {
+    const ov = spineColorOverride[p.id];
+    return (ov?.color ?? p.spineColor) ?? MUTED;
+  };
+  // Map attention state → dot colour.
+  const attentionColorOf = (a: Attention): string =>
+    a === "inactive" ? ATTENTION_INACTIVE : a === "alert" ? ATTENTION_ALERT : ATTENTION_NORMAL;
+  // Lookup a tag value name by id (built from the catalog).
+  const tagNameById = (() => {
+    const m = new Map<string, string>();
+    for (const c of categories) for (const v of c.values) m.set(v.id, v.value);
+    return m;
+  })();
 
-  // Axis pieces.
-  const months: { x: number; label: string }[] = [];
+  // Axis pieces. Month name (serif) and year (small sans) render as a single
+  // inline pair so the axis reads as one typographic unit.
+  const months: { x: number; month: string; year: string }[] = [];
   const days: number[] = [];
   if (measured) {
     const s = new Date(startMs);
@@ -875,7 +934,8 @@ export default function Timeline({
     while (cur.getTime() <= endMs) {
       months.push({
         x: xFor(cur.getTime()),
-        label: cur.toLocaleString("en-GB", { month: "short", year: "numeric" }),
+        month: cur.toLocaleString("en-GB", { month: "short" }),
+        year: String(cur.getFullYear()),
       });
       cur.setMonth(cur.getMonth() + 1);
     }
@@ -906,19 +966,37 @@ export default function Timeline({
       >
         {measured && (
           <div style={{ width: LABEL_W + canvasW }}>
-            {/* Axis row */}
+            {/* Axis row — frozen left cell houses Find; right side is the calendar */}
             <div className="sticky top-0 z-20 flex">
               <div
-                className="sticky left-0 z-30 border-b border-r border-hairline bg-paper-surface"
-                style={{ width: LABEL_W, height: AXIS_H }}
-              />
-              <svg width={canvasW} height={AXIS_H} className="border-b border-hairline" style={{ background: PAPER_SURFACE }}>
+                className="sticky left-0 z-30 flex items-center border-b border-r border-hairline px-3"
+                style={{ width: LABEL_W, height: AXIS_H, background: AXIS_BG }}
+              >
+                <button
+                  onClick={() => {
+                    setUpcomingOpen(false);
+                    setRecentOpen(false);
+                    setTagFindOpen(false);
+                    setSearchQuery("");
+                    setSearchOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 text-sm text-muted hover:text-ink"
+                  title="Search projects and nodes (press Enter)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                    <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  Find
+                </button>
+              </div>
+              <svg width={canvasW} height={AXIS_H} className="border-b border-hairline" style={{ background: AXIS_BG }}>
                 {showDayNumbers &&
                   days.map((t, i) => {
                     const x = xFor(t);
                     return (
                       <g key={i}>
-                        <line x1={x} y1={AXIS_H - 9} x2={x} y2={AXIS_H} stroke={HAIRLINE} />
+                        <line x1={x} y1={AXIS_H - 9} x2={x} y2={AXIS_H} stroke={AXIS_RULE} />
                         <text x={x + 3} y={AXIS_H - 11} fill={MUTED} fontSize={9}>
                           {new Date(t).getDate()}
                         </text>
@@ -927,14 +1005,25 @@ export default function Timeline({
                   })}
                 {months.map((m, i) => (
                   <g key={`m${i}`}>
-                    <line x1={m.x} y1={0} x2={m.x} y2={AXIS_H} stroke={HAIRLINE} />
-                    <text x={m.x + 5} y={15} fill={INK} fontSize={12} fontWeight={500} fontFamily="Georgia, serif">
-                      {m.label}
+                    <line x1={m.x} y1={0} x2={m.x} y2={AXIS_H} stroke={AXIS_RULE} />
+                    <text x={m.x + 6} y={20} fill={AXIS_INK} fontSize={13} fontWeight={500} fontFamily='Georgia, "Iowan Old Style", serif'>
+                      {m.month}
+                      <tspan
+                        dx="3"
+                        fill={AXIS_YEAR}
+                        fontSize={10}
+                        fontFamily='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif'
+                        fontWeight={400}
+                      >
+                        {m.year}
+                      </tspan>
                     </text>
                   </g>
                 ))}
+                {/* Today: slim oxblood line with a small pill at the top */}
                 <line x1={todayX} y1={0} x2={todayX} y2={AXIS_H} stroke={OXBLOOD} strokeWidth={1.5} />
-                <text x={todayX + 4} y={28} fill={OXBLOOD} fontSize={10}>
+                <rect x={todayX - 18} y={3} width={36} height={14} rx={4} fill={OXBLOOD} />
+                <text x={todayX} y={13} fill={PAPER} fontSize={9} textAnchor="middle">
                   Today
                 </text>
               </svg>
@@ -998,48 +1087,93 @@ export default function Timeline({
                             archived: p.archived,
                             tags: projTagsOf(p),
                             color: customColor,
+                            spineColor: spineColorOf(p),
+                            spineUserSet:
+                              spineColorOverride[p.id]?.userSet ?? p.spineUserSet,
                           })
                     }
-                    className="sticky left-0 z-10 flex cursor-pointer items-center gap-2 border-b border-r border-hairline bg-paper-surface px-4 hover:bg-paper"
+                    className="sticky left-0 z-10 flex cursor-pointer items-stretch border-b border-r border-hairline bg-paper-surface hover:bg-paper"
                     style={{ width: LABEL_W, height: laneH }}
                     title={armed ? `Stamp "${armed.value}"` : "Project options"}
                   >
-                    {p.nodes.length > 0 && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          jumpToTime(p.nodes[0].t);
-                        }}
-                        title="Jump to the start of this project"
-                        className="shrink-0 text-muted hover:text-ink"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-                          <rect x="5" y="5" width="2.4" height="14" rx="1" fill="currentColor" />
-                          <path d="M20 5 L9 12 L20 19 Z" fill="currentColor" />
-                        </svg>
-                      </button>
-                    )}
-                    <span
-                      className="inline-block h-3 w-3 shrink-0 rounded-full"
-                      style={{ background: projColorOf(p) }}
+                    {/* 4px coloured spine on the far left edge */}
+                    <div
+                      className="w-1 shrink-0"
+                      style={{ background: spineColorOf(p) }}
+                      aria-hidden
                     />
-                    <span className="brand-serif line-clamp-2 text-sm leading-tight text-ink" title={p.name}>{p.name}</span>
-                    {ptags.length > 0 && (
-                      <span className="flex shrink-0 items-center gap-0.5">
-                        {ptags.map((tid) => (
-                          <span
-                            key={tid}
-                            className="tag-pop h-3 w-3 rounded-full"
-                            style={{ background: tagColors[tid] ?? MUTED }}
-                          />
-                        ))}
-                      </span>
-                    )}
-                    {p.archived && (
-                      <span className="shrink-0 rounded border border-hairline bg-paper px-1.5 py-0.5 text-[10px] text-muted">
-                        archived
-                      </span>
-                    )}
+
+                    {/* Top-aligned content so tall lanes don't leave the name floating */}
+                    <div className="flex min-w-0 flex-1 flex-col gap-1 px-3 pt-3 pb-2">
+                      {/* Row 1: attention dot · name · skip-to-start */}
+                      <div className="flex items-start gap-1.5">
+                        <span
+                          className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full"
+                          style={{ background: attentionColorOf(p.attention) }}
+                          aria-hidden
+                        />
+                        <span
+                          className="brand-serif line-clamp-2 min-w-0 flex-1 text-sm leading-tight text-ink"
+                          title={p.name}
+                        >
+                          {p.name}
+                        </span>
+                        {p.nodes.length > 0 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              jumpToTime(p.nodes[0].t);
+                            }}
+                            title="Jump to the start of this project"
+                            className="mt-0.5 shrink-0 text-muted hover:text-ink"
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden>
+                              <rect x="5" y="5" width="2.4" height="14" rx="1" fill="currentColor" />
+                              <path d="M20 5 L9 12 L20 19 Z" fill="currentColor" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Row 2: tag pills, indented under the name (not under the dot) */}
+                      {ptags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pl-3">
+                          {ptags.map((tid) => {
+                            const tc = tagColors[tid] ?? MUTED;
+                            const tname = tagNameById.get(tid) ?? "";
+                            return (
+                              <span
+                                key={tid}
+                                className="tag-pop inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px]"
+                                style={{
+                                  background: PAPER,
+                                  border: `1px solid ${tc}66`,
+                                  color: PILL_INK,
+                                }}
+                              >
+                                <span
+                                  className="h-1.5 w-1.5 rounded-full"
+                                  style={{ background: tc }}
+                                />
+                                {tname}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Row 3: meta line — node count + relative time */}
+                      <div className="pl-3 text-[10px] text-muted">
+                        {p.nodes.length} node{p.nodes.length === 1 ? "" : "s"} · updated{" "}
+                        {relTimeAgo(p.lastActivityAt, nowMs)}
+                      </div>
+
+                      {p.archived && (
+                        <span className="self-start rounded border border-hairline bg-paper px-1.5 py-0.5 text-[10px] text-muted">
+                          archived
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <svg width={canvasW} height={laneH} className="border-b border-hairline" style={{ background: PAPER }}>
@@ -1703,26 +1837,13 @@ export default function Timeline({
         </div>
       )}
 
-      {/* Find button (top-left, under Arrange) — Enter also opens it */}
-      {!searchOpen && (
-        <button
-          onClick={() => {
-            setUpcomingOpen(false);
-            setRecentOpen(false);
-            setTagFindOpen(false);
-            setSearchQuery("");
-            setSearchOpen(true);
-          }}
-          className="absolute left-3 top-2 z-30 flex items-center gap-1.5 rounded-lg border border-hairline bg-paper-surface/90 px-3 py-1.5 text-sm text-ink shadow backdrop-blur hover:bg-paper-surface"
-          title="Search projects and nodes (press Enter)"
-        >
-          🔍 Find
-        </button>
-      )}
-
-      {/* Find: live search over projects then nodes — a popover at top-left, under Arrange */}
+      {/* Find: live search over projects then nodes — popover anchors below
+          the docked Find button (which now lives in the axis left column). */}
       {searchOpen && (
-        <div className="absolute left-3 top-2 z-40 w-72 rounded-lg border border-hairline bg-paper-surface/95 shadow-xl backdrop-blur">
+        <div
+          className="absolute left-3 z-40 w-72 rounded-lg border border-hairline bg-paper-surface/95 shadow-xl backdrop-blur"
+          style={{ top: AXIS_H + 6 }}
+        >
           <div className="flex items-center gap-2 border-b border-hairline px-2 py-1.5">
             <input
               autoFocus
@@ -2458,7 +2579,7 @@ export default function Timeline({
                   {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
                 </p>
 
-                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Colour</p>
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Wire colour</p>
                 <div className="mb-5 flex flex-wrap items-center gap-2">
                   {(() => {
                     const cur = projMenu.id in projColorOverride ? projColorOverride[projMenu.id] : projMenu.color;
@@ -2485,6 +2606,30 @@ export default function Timeline({
                       </>
                     );
                   })()}
+                </div>
+
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Spine colour</p>
+                <div className="mb-5 flex flex-wrap items-center gap-2">
+                  {SPINE_PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => applySpineColor(projMenu.id, c)}
+                      className={`h-6 w-6 rounded-sm border-2 ${
+                        projMenu.spineColor === c ? "border-oxblood" : "border-transparent"
+                      }`}
+                      style={{ background: c }}
+                      title={`Set spine colour ${c}`}
+                    />
+                  ))}
+                  <button
+                    onClick={() => applySpineColor(projMenu.id, null)}
+                    title="Reset to the auto-assigned spine colour"
+                    className={`rounded-full border px-2 py-0.5 text-xs ${
+                      projMenu.spineUserSet ? "border-hairline text-ink hover:bg-paper" : "border-oxblood text-oxblood"
+                    }`}
+                  >
+                    Auto
+                  </button>
                 </div>
 
                 <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tags</p>

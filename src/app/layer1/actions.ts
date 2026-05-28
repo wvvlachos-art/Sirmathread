@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { SPINE_PALETTE } from "@/lib/theme";
 
 // Create an Ambition (a forward-looking to-do) for a project.
 // Row-Level Security ensures you can only add to your own projects.
@@ -114,7 +115,8 @@ export async function setNodeDone(id: string, done: boolean): Promise<{ error?: 
   return {};
 }
 
-// Create a manual project (no Gmail label behind it).
+// Create a manual project (no Gmail label behind it). Assigns the next
+// spine_color slot by cycling the palette in this user's creation order.
 export async function createProject(
   name: string,
   startDate: string
@@ -128,6 +130,14 @@ export async function createProject(
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not signed in." };
 
+  // Pick the next palette slot. `count` includes archived/trash projects so
+  // numbering stays stable even when projects come and go.
+  const { count } = await supabase
+    .from("projects")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+  const spineColor = SPINE_PALETTE[((count ?? 0) % SPINE_PALETTE.length)];
+
   const { data, error } = await supabase
     .from("projects")
     .insert({
@@ -137,6 +147,8 @@ export async function createProject(
       gmail_label_name: null,
       created_at: startDate ? `${startDate}T09:00:00Z` : undefined,
       last_activity_at: new Date().toISOString(),
+      spine_color: spineColor,
+      spine_color_is_user_set: false,
     })
     .select("id")
     .single();
@@ -144,6 +156,48 @@ export async function createProject(
 
   revalidatePath("/layer1");
   return { id: data.id };
+}
+
+// Override (or reset) a project's spine_color. Passing null resets to the
+// auto-assigned palette slot — we recompute from current project count.
+export async function setProjectSpineColor(
+  projectId: string,
+  color: string | null
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  if (color === null) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { error: "Not signed in." };
+    // Re-pick a palette slot based on this project's position in the user's
+    // creation order — keeps the auto-assign rule consistent on reset.
+    const { data: row } = await supabase
+      .from("projects")
+      .select("created_at")
+      .eq("id", projectId)
+      .single();
+    const createdAt = row?.created_at ?? new Date().toISOString();
+    const { count } = await supabase
+      .from("projects")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .lte("created_at", createdAt);
+    const slot = Math.max(0, (count ?? 1) - 1) % SPINE_PALETTE.length;
+    const { error } = await supabase
+      .from("projects")
+      .update({ spine_color: SPINE_PALETTE[slot], spine_color_is_user_set: false })
+      .eq("id", projectId);
+    if (error) return { error: error.message };
+  } else {
+    const { error } = await supabase
+      .from("projects")
+      .update({ spine_color: color, spine_color_is_user_set: true })
+      .eq("id", projectId);
+    if (error) return { error: error.message };
+  }
+  revalidatePath("/layer1");
+  return {};
 }
 
 // Add a manual node (square, dated, titled) to any project.

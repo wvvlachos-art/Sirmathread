@@ -43,6 +43,8 @@ type DbProject = {
   gmail_label_name: string | null;
   origin: string;
   color: string | null;
+  spine_color: string | null;
+  spine_color_is_user_set: boolean | null;
   deadline: string | null;
   deadline_set_at: string | null;
   done: boolean;
@@ -98,7 +100,7 @@ export default async function Layer1Page({
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, display_name, gmail_label_name, origin, color, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
+      "id, display_name, gmail_label_name, origin, color, spine_color, spine_color_is_user_set, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
     )
     .in("state", ["active", "archived"]);
 
@@ -254,16 +256,31 @@ export default async function Layer1Page({
       anchorT: (nt.node_id && nodeTimeById[nt.node_id]) || lastT,
     }));
 
+    const inactive = !!(
+      p.last_activity_at &&
+      nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
+    );
+    // Attention status drives the dot before the project name.
+    // - inactive: faded gray (the 45-day quiet threshold)
+    // - alert: at least one node has a deadline at stage 3 (75%+) or overdue
+    // - normal: active, nothing urgent
+    let attention: "inactive" | "alert" | "normal" = inactive ? "inactive" : "normal";
+    if (!inactive) {
+      const hasUrgent = nodes.some((n) => n.deadline && !n.done && n.stage >= 75);
+      if (hasUrgent) attention = "alert";
+    }
+
     return {
       id: p.id,
       name: p.display_name ?? p.gmail_label_name ?? "(untitled project)",
       origin: p.origin === "manual" ? "manual" : "gmail",
       color: p.color,
+      spineColor: p.spine_color ?? null,
+      spineUserSet: !!p.spine_color_is_user_set,
+      attention,
+      lastActivityAt: p.last_activity_at,
       archived: p.state === "archived",
-      inactive: !!(
-        p.last_activity_at &&
-        nowMs - new Date(p.last_activity_at).getTime() > INACTIVE_DAYS * DAY
-      ),
+      inactive,
       nodes,
       tags: (p.project_tag_values ?? []).map((t) => t.tag_value_id),
       ambitions: (p.ambitions ?? [])

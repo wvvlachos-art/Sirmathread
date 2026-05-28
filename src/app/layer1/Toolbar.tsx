@@ -195,20 +195,25 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
     .sort((a, b) => (filterCounts[b.id] ?? 0) - (filterCounts[a.id] ?? 0))
     .slice(0, 2);
 
-  const selectCls = "rounded-md border border-hairline bg-paper px-2 py-1 text-sm text-ink hover:bg-paper-surface";
+  // Compact control style for the Arrange select + asc/desc button — sits flush
+  // with the editorial rail, hairline edge, paper fill.
+  const selectCls = "rounded-[7px] border border-hairline bg-paper px-2 py-1 text-sm text-ink hover:bg-paper-surface";
   const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4";
   const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl";
-
+  // Zone-header style: serif italic in oxblood, sentence case (not all-caps).
+  const zone = "brand-serif italic text-[12px] text-oxblood";
+  // Editorial pill: paper bg, hairline-y border, muted ink. Active = oxblood.
   const chip = (o: FilterOpt, removable: boolean) => (
     <button
       key={o.id}
       onClick={o.toggle}
       title={removable ? "Remove filter" : o.isActive ? "Active — click to remove" : "Apply filter"}
-      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+      className="flex items-center gap-1 px-2 py-0.5 text-xs"
       style={{
-        background: o.isActive ? o.color ?? "var(--ink)" : "transparent",
-        color: o.isActive ? "#fff" : "var(--ink)",
-        border: `1px solid ${o.color ?? "var(--hairline)"}`,
+        background: o.isActive ? o.color ?? "var(--oxblood)" : "var(--paper)",
+        color: o.isActive ? "#fff" : "var(--pill-ink)",
+        border: `1px solid ${o.isActive ? (o.color ?? "var(--oxblood)") : "var(--pill-edge)"}`,
+        borderRadius: 9,
       }}
     >
       {o.label}
@@ -217,10 +222,10 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-hairline bg-paper-surface px-6 py-2.5">
-      {/* Arrange */}
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t-2 border-t-oxblood border-b border-b-hairline bg-paper-surface px-6 py-2.5">
+      {/* Arrange zone */}
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Arrange</span>
+        <span className={zone}>Arrange</span>
         <select
           className={selectCls}
           value={sort}
@@ -245,9 +250,12 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
         </button>
       </div>
 
-      {/* Filters: button + quick-select + active chips */}
+      {/* Hairline zone divider */}
+      <div className="h-[18px] w-px bg-hairline" />
+
+      {/* Filter zone */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Filter</span>
+        <span className={zone}>Filter</span>
         <button onClick={() => setFiltersOpen(true)} className={selectCls}>
           Filters{activeOpts.length ? ` (${activeOpts.length})` : ""} ▾
         </button>
@@ -257,22 +265,17 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
           <button
             onClick={clearFilters}
             title="Clear all filters"
-            className={selectCls}
+            className="text-xs text-muted hover:text-oxblood"
           >
             Clear ✕
           </button>
         )}
 
         {/* quick-select: your most-used filters */}
-        {quickOpts.length > 0 && (
-          <>
-            <span className="text-[10px] uppercase tracking-wide text-muted">Quick</span>
-            {quickOpts.map((o) => chip(o, false))}
-          </>
-        )}
+        {quickOpts.length > 0 && quickOpts.map((o) => chip(o, false))}
 
         {/* active filters as removable chips */}
-        {activeOpts.length > 0 && <span className="text-hairline">|</span>}
+        {activeOpts.length > 0 && quickOpts.length > 0 && <span className="text-hairline">·</span>}
         {activeOpts.map((o) => chip(o, true))}
 
         {/* how many projects are currently held back, with a one-click escape hatch */}
@@ -287,18 +290,28 @@ export default function Toolbar({ categories, hiddenCount }: { categories: TagCa
         )}
       </div>
 
-      {/* Tags: manage + magic wand */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Tags</span>
-        <button onClick={() => setManageOpen(true)} className={selectCls}>
+      {/* Flexible spacer pushes Tags zone to the right edge */}
+      <div className="flex-1" />
+
+      {/* Hairline zone divider */}
+      <div className="h-[18px] w-px bg-hairline" />
+
+      {/* Tags zone (right-aligned) */}
+      <div className="flex items-center gap-3">
+        <span className={zone}>Tags</span>
+        <button
+          onClick={() => setManageOpen(true)}
+          className="text-sm text-ink hover:text-oxblood"
+        >
           Manage
         </button>
         <button
           onClick={() => (armed ? setArmed(null) : setWandOpen(true))}
           title={armed ? "Put the wand down (Esc)" : "Magic wand — stamp a tag onto things"}
-          className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm ${
-            armed ? "border-oxblood bg-oxblood text-paper" : "border-hairline bg-paper text-ink hover:bg-paper-surface"
+          className={`flex items-center gap-1 px-2 py-1 text-sm ${
+            armed ? "bg-oxblood text-paper" : "bg-transparent text-oxblood hover:bg-oxblood/10"
           }`}
+          style={{ border: `0.5px solid var(--oxblood)`, borderRadius: 7 }}
         >
           <WandIcon />
           {armed ? `${armed.value} ✕` : ""}

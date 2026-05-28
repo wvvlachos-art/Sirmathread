@@ -16,6 +16,13 @@
   --hairline: #cbbb96;       /* 1px borders/separators */
   --note-fill: #f2e4a8;      /* sticky-note fill */
   --note-border: #cdb858;    /* sticky-note border */
+  /* Editorial header (locked 2026-05-28). */
+  --axis-bg: #e8ddc6;        /* calendar axis background — sibling to paper */
+  --axis-ink: #5c5238;       /* month names (serif) */
+  --axis-year: #a39573;      /* year numerals (small sans) */
+  --axis-rule: #d3c5a3;      /* faint month dividers — lighter than hairline */
+  --pill-edge: #ddd0b3;      /* filter/quick pill border */
+  --pill-ink: #6b6244;       /* filter/quick pill text */
 }
 
 @theme inline {
@@ -29,6 +36,12 @@
   --color-hairline: var(--hairline);
   --color-note-fill: var(--note-fill);
   --color-note-border: var(--note-border);
+  --color-axis-bg: var(--axis-bg);
+  --color-axis-ink: var(--axis-ink);
+  --color-axis-year: var(--axis-year);
+  --color-axis-rule: var(--axis-rule);
+  --color-pill-edge: var(--pill-edge);
+  --color-pill-ink: var(--pill-ink);
 
   --font-serif: Georgia, "Iowan Old Style", "Hoefler Text", Cambria, "Times New Roman", serif;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
