@@ -156,6 +156,154 @@ function pipPositions(n: number): { x: number; y: number; r: number }[] {
   return out;
 }
 
+// ---- Per-lane label layout --------------------------------------------------
+// Goal: keep adjacent node labels from overlapping. Strategy in priority order
+// is place→stagger→truncate→absorb (the last reusing the existing cluster
+// mechanism). Computed once per render from clusters + measured text widths.
+
+const LABEL_FONT =
+  '11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif';
+const LABEL_GAP = 4;     // px breathing room between labels on the same side
+const LABEL_MIN_W = 18;  // narrower than this → can't read → absorb into cluster
+
+let _measureCanvas: HTMLCanvasElement | null = null;
+function measureText(text: string, fontStr: string): number {
+  if (typeof document === "undefined") return text.length * 6; // SSR fallback
+  if (!_measureCanvas) _measureCanvas = document.createElement("canvas");
+  const ctx = _measureCanvas.getContext("2d");
+  if (!ctx) return text.length * 6;
+  ctx.font = fontStr;
+  return ctx.measureText(text).width;
+}
+
+// Binary-search the longest prefix that, with an ellipsis, fits within maxWidth.
+function truncateToWidth(text: string, maxWidth: number, fontStr: string): string {
+  if (measureText(text, fontStr) <= maxWidth) return text;
+  let lo = 1;
+  let hi = text.length;
+  let best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const w = measureText(text.slice(0, mid) + "…", fontStr);
+    if (w <= maxWidth) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best >= 1 ? text.slice(0, best) + "…" : "";
+}
+
+type SoloLabel = { text: string; fullText: string; side: "below" | "above" };
+
+function layoutLaneLabels(
+  nodes: LaneNode[],
+  xFor: (t: number) => number,
+  nodeSize: number,
+): { clusters: LaneNode[][]; labels: Map<string, SoloLabel> } {
+  // 1. Initial clustering — same threshold as before, so we don't change which
+  //    nodes already cluster; we only use clustering as the *fallback* below.
+  const minGapX = nodeSize + 6;
+  const clusters: LaneNode[][] = [];
+  {
+    let i = 0;
+    while (i < nodes.length) {
+      let j = i + 1;
+      while (j < nodes.length && xFor(nodes[j].t) - xFor(nodes[j - 1].t) < minGapX) j++;
+      clusters.push(nodes.slice(i, j));
+      i = j;
+    }
+  }
+
+  // 2. Single L→R sweep over EVERY node (solo *and* cluster member). Each
+  //    label tries: below → above → truncate. Solos that don't fit are
+  //    candidates for absorption; cluster members that don't fit just drop
+  //    their leader-text (the cluster badge + click-list still covers them).
+  type PlaceResult = { labels: Map<string, SoloLabel>; soloLeftovers: Set<string> };
+  const place = (cls: LaneNode[][]): PlaceResult => {
+    const labels = new Map<string, SoloLabel>();
+    const soloLeftovers = new Set<string>();
+    const soloIds = new Set<string>();
+    for (const cl of cls) if (cl.length === 1) soloIds.add(cl[0].id);
+
+    type Item = { nodeId: string; cx: number; text: string };
+    const items: Item[] = [];
+    for (const cl of cls) for (const n of cl) items.push({ nodeId: n.id, cx: xFor(n.t), text: n.label });
+    items.sort((a, b) => a.cx - b.cx);
+
+    let lastBelow = -Infinity;
+    let lastAbove = -Infinity;
+    for (const it of items) {
+      const fullW = measureText(it.text, LABEL_FONT);
+      if (it.cx - fullW / 2 >= lastBelow + LABEL_GAP) {
+        labels.set(it.nodeId, { text: it.text, fullText: it.text, side: "below" });
+        lastBelow = it.cx + fullW / 2;
+        continue;
+      }
+      if (it.cx - fullW / 2 >= lastAbove + LABEL_GAP) {
+        labels.set(it.nodeId, { text: it.text, fullText: it.text, side: "above" });
+        lastAbove = it.cx + fullW / 2;
+        continue;
+      }
+      const tryTrunc = (side: "below" | "above", roomEdge: number): boolean => {
+        const availW = 2 * (it.cx - roomEdge - LABEL_GAP);
+        if (availW < LABEL_MIN_W) return false;
+        const t = truncateToWidth(it.text, availW, LABEL_FONT);
+        if (!t) return false;
+        const w = measureText(t, LABEL_FONT);
+        labels.set(it.nodeId, { text: t, fullText: it.text, side });
+        if (side === "below") lastBelow = it.cx + w / 2;
+        else lastAbove = it.cx + w / 2;
+        return true;
+      };
+      const placed =
+        lastBelow <= lastAbove
+          ? tryTrunc("below", lastBelow) || tryTrunc("above", lastAbove)
+          : tryTrunc("above", lastAbove) || tryTrunc("below", lastBelow);
+      // Solos that couldn't fit anything are candidates for absorption;
+      // cluster members just go without a leader-text (badge covers them).
+      if (!placed && soloIds.has(it.nodeId)) soloLeftovers.add(it.nodeId);
+    }
+    return { labels, soloLeftovers };
+  };
+
+  let { labels, soloLeftovers } = place(clusters);
+
+  // 3. Absorb unfittable solos into the nearest adjacent cluster, processed
+  //    back-to-front so earlier indices stay valid through splices.
+  if (soloLeftovers.size) {
+    const absorbIdx: number[] = [];
+    for (let i = 0; i < clusters.length; i++) {
+      if (clusters[i].length === 1 && soloLeftovers.has(clusters[i][0].id)) absorbIdx.push(i);
+    }
+    absorbIdx.sort((a, b) => b - a);
+    for (const idx of absorbIdx) {
+      const my = clusters[idx];
+      const myX = xFor(my[0].t);
+      const dist = (cl: LaneNode[]) => {
+        const xs = cl.map((n) => xFor(n.t));
+        const cxC = cl.length > 1 ? (Math.min(...xs) + Math.max(...xs)) / 2 : xs[0];
+        return Math.abs(cxC - myX);
+      };
+      const hasPrev = idx - 1 >= 0;
+      const hasNext = idx + 1 < clusters.length;
+      let targetIdx: number;
+      if (hasPrev && hasNext) targetIdx = dist(clusters[idx - 1]) <= dist(clusters[idx + 1]) ? idx - 1 : idx + 1;
+      else if (hasPrev) targetIdx = idx - 1;
+      else if (hasNext) targetIdx = idx + 1;
+      else continue;
+      clusters[targetIdx] = [...clusters[targetIdx], ...my].sort((a, b) => a.t - b.t);
+      clusters.splice(idx, 1);
+    }
+    // Re-run placement now that the cluster shape changed; second-pass
+    // leftovers (cluster-member labels that still can't fit) just don't render.
+    labels = place(clusters).labels;
+  }
+
+  return { clusters, labels };
+}
+
 export default function Timeline({
   lanes,
   nowMs,
@@ -806,18 +954,12 @@ export default function Timeline({
               // Group nodes that bunch up in time. A cluster of 2+ collapses into a
               // single "count" marker; its members' titles fan out above/below the
               // line, each with a thin leader to its exact spot.
-              const clusters: LaneNode[][] = [];
-              {
-                const minGapX = nodeSize + 6;
-                const ns = p.nodes; // already sorted by time
-                let i = 0;
-                while (i < ns.length) {
-                  let j = i + 1;
-                  while (j < ns.length && xFor(ns[j].t) - xFor(ns[j - 1].t) < minGapX) j++;
-                  clusters.push(ns.slice(i, j));
-                  i = j;
-                }
-              }
+              //
+              // layoutLaneLabels also resolves label collisions: solo labels stagger
+              // above/below the wire, truncate when crowded, and unfittable solos
+              // get absorbed into the nearest cluster — so a returned cluster's
+              // membership may exceed what the time-gap threshold alone produced.
+              const { clusters, labels: nodeLabels } = layoutLaneLabels(p.nodes, xFor, nodeSize);
 
               // Same idea for ambitions (round markers are bigger, so a wider gap).
               const ambClusters: Ambition[][] = [];
@@ -1025,9 +1167,17 @@ export default function Timeline({
                                 {n.done ? " (done)" : ""}
                               </title>
                             </g>
-                            <text x={cx} y={top + nodeSize + 13} fill={MUTED} fontSize={11} textAnchor="middle">
-                              {truncLabel(n.label)}
-                            </text>
+                            {(() => {
+                              const li = nodeLabels.get(n.id);
+                              if (!li) return null;
+                              const y = li.side === "above" ? top - 6 : top + nodeSize + 13;
+                              return (
+                                <text x={cx} y={y} fill={MUTED} fontSize={11} textAnchor="middle">
+                                  <title>{li.fullText}</title>
+                                  {li.text}
+                                </text>
+                              );
+                            })()}
                           </g>
                         );
                       }
@@ -1040,26 +1190,25 @@ export default function Timeline({
                       const doneCount = cl.filter((n) => n.done).length;
                       const allDone = doneCount === cl.length;
                       const anyDeadline = cl.some((n) => n.deadline && !n.done);
-                      const rowH = 14;
                       const hiInCluster = !!highlight && cl.some((n) => n.id === highlight.id);
                       return (
                         <g key={`cl-${cl[0].id}`} opacity={highlight ? (hiInCluster ? 1 : 0.2) : 1}>
-                          {/* each member's title, fanned up/down with a leader to its exact spot */}
-                          {cl.map((n, k) => {
+                          {/* each member's title — placed by the lane-wide layout pass.
+                              Members whose label couldn't fit (alongside other labels
+                              from this and adjacent clusters) just render nothing here;
+                              the cluster badge + click-to-see-list still surfaces them. */}
+                          {cl.map((n) => {
+                            const li = nodeLabels.get(n.id);
+                            if (!li) return null;
                             const mx = xFor(n.t);
-                            const up = k % 2 === 0;
-                            const level = Math.floor(k / 2);
-                            const ty = up
-                              ? centerY - nodeSize / 2 - 8 - level * rowH
-                              : centerY + nodeSize / 2 + 16 + level * rowH;
-                            if (ty < 10 || ty > laneH - 4) return null; // would fall outside the lane
-                            const short = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+                            const ty = li.side === "above" ? top - 6 : top + nodeSize + 13;
                             return (
                               <g key={n.id} className="cursor-pointer" onClick={() => openNode(n)}>
-                                <line x1={mx} y1={centerY} x2={mx} y2={up ? ty + 3 : ty - 9} stroke={HAIRLINE} strokeWidth={1} />
+                                <line x1={mx} y1={centerY} x2={mx} y2={li.side === "above" ? ty + 3 : ty - 9} stroke={HAIRLINE} strokeWidth={1} />
                                 <circle cx={mx} cy={centerY} r={2.5} fill={OXBLOOD} />
-                                <text x={mx} y={ty} fill={INK} fontSize={10} textAnchor="middle">
-                                  {short}
+                                <text x={mx} y={ty} fill={MUTED} fontSize={11} textAnchor="middle">
+                                  <title>{li.fullText}</title>
+                                  {li.text}
                                 </text>
                               </g>
                             );
