@@ -58,6 +58,26 @@ Sirmathread turns your Gmail into visual project flowcharts.
 - Edit the text of any bubble. Your edits are saved.
 - Delete bubbles or notes you don't want. A small "Undo" toast appears for 5 seconds in case of mistakes.
 
+## How things look (locked 2026-05-28)
+
+Sirmathread has its own look, called **"Kraft & oxblood"** — a warm manila/kraft paper background and a deep oxblood red as the signature colour. Project names and the brand appear in a serif (book-style) typeface; small labels on nodes use a clean sans-serif. The intent: feel like a workbench/journal, not another dark-mode SaaS app, and visibly distinct from Anthropic's own cream-and-serif look (theirs is cream, ours is warmer manila; theirs never uses oxblood).
+
+**Three independent things can be shown on a node**, and they never fight each other:
+
+1. **Fill colour = the tag.** An untagged node shows in plain paper-cream with a thin oxblood outline. Give it one tag and the whole node takes that tag's colour. Give it more tags and the node fills with the *primary* tag's colour; each additional tag appears as a thin coloured **bar underneath the node** (small gaps between bars so they don't merge). When you zoom far out (3 months / 6 months across), bars fade away because nodes are too small to read — at those zooms you use the lens instead.
+2. **Red border = the deadline.** A snug red outline hugs the node, filling in **clockwise from the top in four stages** as the deadline approaches: top edge → top+right → top+right+bottom → all four sides. The split is proportional: from the moment you set the deadline to the deadline date is the "runway," cut into quarters. Both due-today and overdue look the same (fully outlined) — we don't shout louder, we just show the deadline is here.
+3. **Origin colour (Gmail vs manual) is gone.** Nodes no longer come in green or blue. Origin will only show up in a detail panel if we ever surface it again.
+
+**Completing a deadline:** tick the node done → the red border vanishes and the node returns to its plain tag-coloured form, with a small check mark inside.
+
+**Tag lens:** to find every node carrying a given tag across all your projects, pick the tag (using the magic wand you already know). Every matching node glows; everything else dims. Turn it off and the canvas calms down again. Works at every zoom level.
+
+**Tags work the same on projects and nodes:** one shared list of tags, applied to either. Project tags show as readable pills under the project name on the left.
+
+**Node-type icons (optional):** by default a node is plain. You can optionally tag it with a *type* (email, decision, meeting, payment, deadline, etc.) and it'll show a tiny line icon. Never required — only if you want it.
+
+**Ambitions (future plans) are unchanged:** still drawn as dashed-outline circles on dashed wires.
+
 ## Project lifecycle: archive, trash, inactive
 
 Sirmathread never deletes Gmail data — at worst you lose Sirmathread-only stuff (bubbles, notes, custom labels). Re-applying the Gmail label brings the project back from scratch.
