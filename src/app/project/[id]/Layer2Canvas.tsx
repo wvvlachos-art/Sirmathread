@@ -17,7 +17,8 @@ export type L2Bubble = {
 };
 
 const NODE = 44;
-const PAD = 72;
+const BAND_W = 54; // soft month band down the left
+const PAD = 96; // left/right padding (keeps the leftmost nodes clear of the band)
 const TOP = 76;
 const ROW_H = 158;
 const CORNER = 30;
@@ -157,6 +158,29 @@ export default function Layer2Canvas({
   const posById = new Map<string, Pt & { label: string }>();
   nodes.forEach((n, i) => posById.set(n.id, { ...positions[i], label: n.label }));
 
+  // Approximate month band (orientation aid only — NOT to scale, since spacing
+  // is compressed). Each month is labelled near the first node that falls in it.
+  const monthBands: { label: string; y: number }[] = [];
+  {
+    let lastKey = "";
+    let lastYear = "";
+    let lastY = -Infinity;
+    nodes.forEach((n, i) => {
+      const d = new Date(n.t);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (key === lastKey) return;
+      const mon = d.toLocaleString("en-GB", { month: "short" });
+      const yr = String(d.getFullYear());
+      let y = positions[i].y;
+      if (y < lastY + 15) y = lastY + 15; // avoid label pile-up within a row
+      monthBands.push({ label: yr !== lastYear ? `${mon} '${yr.slice(2)}` : mon, y });
+      lastKey = key;
+      lastYear = yr;
+      lastY = y;
+    });
+    if (monthBands.length === 1) monthBands[0].y = Math.round(height / 2);
+  }
+
   // Bubble instances with stacking index per (node, side).
   const sideCount: Record<string, number> = {};
   const instances = bubbles
@@ -253,6 +277,21 @@ export default function Layer2Canvas({
     <div ref={ref} className="flex-1 overflow-auto">
       <div className="relative" style={{ width: svgW, height }}>
         <svg width={svgW} height={height} className="absolute inset-0" role="img" aria-label="Project node chain">
+          {/* soft month band (approximate orientation aid) */}
+          <rect x={0} y={0} width={BAND_W} height={height} fill="#e1d5ba" fillOpacity={0.5} />
+          {monthBands.map((m, i) => (
+            <text
+              key={`mb-${i}`}
+              x={10}
+              y={Math.min(height - 8, Math.max(16, m.y))}
+              fontSize={11}
+              fontFamily="Georgia, serif"
+              fill="#8a7d5c"
+            >
+              {m.label}
+            </text>
+          ))}
+
           <path d={roundedPath(positions, CORNER)} fill="none" stroke="#7a2718" strokeOpacity={0.5} strokeWidth={1.75} />
 
           {/* gap annotations */}

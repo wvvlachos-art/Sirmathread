@@ -268,8 +268,9 @@ a downward snake whose rows alternate L→R / R→L, joined by rounded
 (quadratic-bezier, ~30px) curve transitions; the page scrolls vertically. Rows
 fill to the canvas edges before wrapping. **Spacing is time-aware:** distance =
 `clamp(MIN + LOG_FACTOR·ln(1+gapDays), MIN, MAX)` so bursts cluster and quiet
-stretches open up. Gaps > 14 days get an italic "~N weeks later" annotation. (A
-soft month band down the left is specced but deferred pending a visual pass.)
+stretches open up. Gaps > 14 days get an italic "~N weeks later" annotation. A soft, **approximate**
+month band runs down the left (each month labelled near its first node; not
+to-scale by design — it's an orientation aid, not a ruler).
 
 **Context bubbles (`bubbles` table).** Reshaped from the old empty placeholder.
 Columns used: `organization_id` (RLS), `project_id`, `node_id`, `bubble_type`
