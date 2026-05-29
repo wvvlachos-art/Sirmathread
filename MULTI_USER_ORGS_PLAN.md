@@ -46,8 +46,9 @@ Roles: **owner** (full control), **member** (can edit), **viewer** (read-only).
 - [ ] **Phase 4 — Frontend.** Members page, Activity page, account menu (top
       right), org switcher, org-context awareness throughout. Report: pages
       render, basic flows work.
-- [ ] **Phase 5 — Integration testing** (full testing checklist below) →
-      screenshots → **William reviews & approves**.
+- [x] **Phase 5 — Integration testing** DONE 2026-05-29: data-integrity checks
+      passed (supabase/verify-multiuser.mjs), William reviewed on localhost and
+      approved. Production build clean. **Merged to main (e64932c) + deployed.**
 - [ ] **Phase 6 — Project move between workspaces.** Independent of 1–5; can be a
       separate PR if 1–5 ship first.
 
