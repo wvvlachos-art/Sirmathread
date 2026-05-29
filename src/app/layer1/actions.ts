@@ -10,6 +10,42 @@ import { SPINE_PALETTE } from "@/lib/theme";
 // snapshot (NewProjectButton creating a new lane, ManageTags rebuilding the
 // category catalog) call router.refresh() themselves.
 
+// ---- Workspace (organization) helpers --------------------------------------
+// New content must carry the workspace it belongs to (organization_id became
+// required in the multi-user migration). Top-level items (projects, tag
+// categories) go in the user's current workspace; child items inherit their
+// parent's workspace, so they stay correct even for shared projects.
+async function activeOrgId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("memberships")
+    .select("organization_id, role")
+    .eq("user_id", userId);
+  const rows = (data ?? []) as { organization_id: string; role: string }[];
+  if (rows.length === 0) return null;
+  // No workspace switcher yet (Phase 4) — prefer the one they own.
+  const chosen = rows.find((m) => m.role === "owner") ?? rows[0];
+  return chosen.organization_id ?? null;
+}
+
+async function orgOfProject(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string
+): Promise<string | null> {
+  const { data } = await supabase.from("projects").select("organization_id").eq("id", projectId).single();
+  return (data as { organization_id: string } | null)?.organization_id ?? null;
+}
+
+async function orgOfCategory(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  categoryId: string
+): Promise<string | null> {
+  const { data } = await supabase.from("tag_categories").select("organization_id").eq("id", categoryId).single();
+  return (data as { organization_id: string } | null)?.organization_id ?? null;
+}
+
 // Create an Ambition (a forward-looking to-do) for a project.
 // Row-Level Security ensures you can only add to your own projects.
 export async function createAmbition(
@@ -23,9 +59,22 @@ export async function createAmbition(
   if (!targetDate) return { error: "Target date is required." };
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const orgId = await orgOfProject(supabase, projectId);
+  if (!orgId) return { error: "Project not found." };
   const { data, error } = await supabase
     .from("ambitions")
-    .insert({ project_id: projectId, title: clean, target_date: targetDate, is_deadline: isDeadline })
+    .insert({
+      project_id: projectId,
+      title: clean,
+      target_date: targetDate,
+      is_deadline: isDeadline,
+      organization_id: orgId,
+      created_by_user_id: user.id,
+    })
     .select("id")
     .single();
   if (error) return { error: error.message };
@@ -138,10 +187,15 @@ export async function createProject(
     .eq("user_id", user.id);
   const spineColor = SPINE_PALETTE[((count ?? 0) % SPINE_PALETTE.length)];
 
+  const orgId = await activeOrgId(supabase, user.id);
+  if (!orgId) return { error: "No workspace found for your account." };
+
   const { data, error } = await supabase
     .from("projects")
     .insert({
       user_id: user.id,
+      organization_id: orgId,
+      created_by_user_id: user.id,
       display_name: clean,
       origin: "manual",
       gmail_label_name: null,
@@ -210,6 +264,12 @@ export async function createManualNode(
   if (!date) return { error: "Date is required." };
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const orgId = await orgOfProject(supabase, projectId);
+  if (!orgId) return { error: "Project not found." };
   const { data, error } = await supabase
     .from("nodes")
     .insert({
@@ -218,6 +278,8 @@ export async function createManualNode(
       node_date: `${date}T09:00:00Z`,
       origin: "manual",
       state: "promoted",
+      organization_id: orgId,
+      created_by_user_id: user.id,
     })
     .select("id")
     .single();
@@ -237,8 +299,12 @@ export async function createCategory(name: string, sortOrder: number): Promise<{
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not signed in." };
+  const orgId = await activeOrgId(supabase, user.id);
+  if (!orgId) return { error: "No workspace found for your account." };
   const { error } = await supabase.from("tag_categories").insert({
     user_id: user.id,
+    organization_id: orgId,
+    created_by_user_id: user.id,
     name: clean,
     sort_order: sortOrder,
     is_default: false,
@@ -279,9 +345,21 @@ export async function createTagValue(
   const clean = value.trim();
   if (!clean) return { error: "Value is required." };
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const orgId = await orgOfCategory(supabase, categoryId);
+  if (!orgId) return { error: "Category not found." };
   const { error } = await supabase
     .from("tag_values")
-    .insert({ category_id: categoryId, value: clean, color });
+    .insert({
+      category_id: categoryId,
+      value: clean,
+      color,
+      organization_id: orgId,
+      created_by_user_id: user.id,
+    });
   if (error) return { error: error.message };
   return {};
 }
@@ -445,9 +523,23 @@ export async function createNote(
   y: number
 ): Promise<{ id?: string; error?: string }> {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const orgId = await orgOfProject(supabase, projectId);
+  if (!orgId) return { error: "Project not found." };
   const { data, error } = await supabase
     .from("notes")
-    .insert({ project_id: projectId, node_id: nodeId, body, x, y })
+    .insert({
+      project_id: projectId,
+      node_id: nodeId,
+      body,
+      x,
+      y,
+      organization_id: orgId,
+      created_by_user_id: user.id,
+    })
     .select("id")
     .single();
   if (error) return { error: error.message };
