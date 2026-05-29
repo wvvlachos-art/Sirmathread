@@ -1,7 +1,14 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { SPINE_PALETTE } from "@/lib/theme";
+
+// NOTE on revalidatePath: Layer 1 used to call revalidatePath("/layer1") after
+// every mutation, which re-ran the giant Supabase query and re-rendered the
+// whole canvas. Now the client applies all updates optimistically and these
+// actions just persist the change. The screens that need a fresh server-side
+// snapshot (NewProjectButton creating a new lane, ManageTags rebuilding the
+// category catalog) call router.refresh() themselves.
 
 // Create an Ambition (a forward-looking to-do) for a project.
 // Row-Level Security ensures you can only add to your own projects.
@@ -10,18 +17,72 @@ export async function createAmbition(
   title: string,
   targetDate: string,
   isDeadline = false
-): Promise<{ error?: string }> {
+): Promise<{ id?: string; error?: string }> {
   const clean = title.trim();
   if (!clean) return { error: "Title is required." };
   if (!targetDate) return { error: "Target date is required." };
 
   const supabase = await createClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("ambitions")
-    .insert({ project_id: projectId, title: clean, target_date: targetDate, is_deadline: isDeadline });
+    .insert({ project_id: projectId, title: clean, target_date: targetDate, is_deadline: isDeadline })
+    .select("id")
+    .single();
   if (error) return { error: error.message };
+  return { id: data.id };
+}
 
-  revalidatePath("/layer1");
+// Edit a node's title and/or date. Date is "YYYY-MM-DD"; stored at 09:00 UTC.
+// (For Gmail-sourced nodes the timeline position follows the email date, so the
+// caller only offers date editing for manual nodes.)
+export async function updateNode(
+  id: string,
+  fields: { label?: string; date?: string }
+): Promise<{ error?: string }> {
+  const patch: { display_label?: string; node_date?: string } = {};
+  if (fields.label !== undefined) {
+    const clean = fields.label.trim();
+    if (!clean) return { error: "Title is required." };
+    patch.display_label = clean;
+  }
+  if (fields.date !== undefined) {
+    if (!fields.date) return { error: "Date is required." };
+    patch.node_date = `${fields.date}T09:00:00Z`;
+  }
+  if (Object.keys(patch).length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("nodes").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  return {};
+}
+
+// Edit an ambition's title, target date, and/or deadline flag.
+export async function updateAmbition(
+  id: string,
+  fields: { title?: string; targetDate?: string; isDeadline?: boolean }
+): Promise<{ error?: string }> {
+  const patch: { title?: string; target_date?: string; is_deadline?: boolean } = {};
+  if (fields.title !== undefined) {
+    const clean = fields.title.trim();
+    if (!clean) return { error: "Title is required." };
+    patch.title = clean;
+  }
+  if (fields.targetDate !== undefined) {
+    if (!fields.targetDate) return { error: "Date is required." };
+    patch.target_date = fields.targetDate;
+  }
+  if (fields.isDeadline !== undefined) patch.is_deadline = fields.isDeadline;
+  if (Object.keys(patch).length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("ambitions").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  return {};
+}
+
+export async function deleteAmbition(id: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("ambitions").delete().eq("id", id);
+  if (error) return { error: error.message };
   return {};
 }
 
@@ -34,7 +95,6 @@ export async function setNodeDeadline(id: string, date: string): Promise<{ error
     .update({ deadline: date, deadline_set_at: new Date().toISOString(), done: false })
     .eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -45,7 +105,6 @@ export async function clearNodeDeadline(id: string): Promise<{ error?: string }>
     .update({ deadline: null, deadline_set_at: null, done: false })
     .eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -53,15 +112,15 @@ export async function setNodeDone(id: string, done: boolean): Promise<{ error?: 
   const supabase = await createClient();
   const { error } = await supabase.from("nodes").update({ done }).eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
-// Create a manual project (no Gmail label behind it).
+// Create a manual project (no Gmail label behind it). Assigns the next
+// spine_color slot by cycling the palette in this user's creation order.
 export async function createProject(
   name: string,
   startDate: string
-): Promise<{ id?: string; error?: string }> {
+): Promise<{ id?: string; spineColor?: string; error?: string }> {
   const clean = name.trim();
   if (!clean) return { error: "Project name is required." };
 
@@ -70,6 +129,14 @@ export async function createProject(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not signed in." };
+
+  // Pick the next palette slot. `count` includes archived/trash projects so
+  // numbering stays stable even when projects come and go.
+  const { count } = await supabase
+    .from("projects")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+  const spineColor = SPINE_PALETTE[((count ?? 0) % SPINE_PALETTE.length)];
 
   const { data, error } = await supabase
     .from("projects")
@@ -80,13 +147,56 @@ export async function createProject(
       gmail_label_name: null,
       created_at: startDate ? `${startDate}T09:00:00Z` : undefined,
       last_activity_at: new Date().toISOString(),
+      spine_color: spineColor,
+      spine_color_is_user_set: false,
     })
     .select("id")
     .single();
   if (error) return { error: error.message };
+  return { id: data.id, spineColor };
+}
 
-  revalidatePath("/layer1");
-  return { id: data.id };
+// Override (or reset) a project's spine_color. Passing null resets to the
+// auto-assigned palette slot — we recompute from current project count.
+export async function setProjectSpineColor(
+  projectId: string,
+  color: string | null
+): Promise<{ color?: string; error?: string }> {
+  const supabase = await createClient();
+  if (color === null) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { error: "Not signed in." };
+    // Re-pick a palette slot based on this project's position in the user's
+    // creation order — keeps the auto-assign rule consistent on reset.
+    const { data: row } = await supabase
+      .from("projects")
+      .select("created_at")
+      .eq("id", projectId)
+      .single();
+    const createdAt = row?.created_at ?? new Date().toISOString();
+    const { count } = await supabase
+      .from("projects")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .lte("created_at", createdAt);
+    const slot = Math.max(0, (count ?? 1) - 1) % SPINE_PALETTE.length;
+    const picked = SPINE_PALETTE[slot];
+    const { error } = await supabase
+      .from("projects")
+      .update({ spine_color: picked, spine_color_is_user_set: false })
+      .eq("id", projectId);
+    if (error) return { error: error.message };
+    return { color: picked };
+  } else {
+    const { error } = await supabase
+      .from("projects")
+      .update({ spine_color: color, spine_color_is_user_set: true })
+      .eq("id", projectId);
+    if (error) return { error: error.message };
+    return { color };
+  }
 }
 
 // Add a manual node (square, dated, titled) to any project.
@@ -94,26 +204,31 @@ export async function createManualNode(
   projectId: string,
   title: string,
   date: string
-): Promise<{ error?: string }> {
+): Promise<{ id?: string; error?: string }> {
   const clean = title.trim();
   if (!clean) return { error: "Node title is required." };
   if (!date) return { error: "Date is required." };
 
   const supabase = await createClient();
-  const { error } = await supabase.from("nodes").insert({
-    project_id: projectId,
-    display_label: clean,
-    node_date: `${date}T09:00:00Z`,
-    origin: "manual",
-    state: "promoted",
-  });
+  const { data, error } = await supabase
+    .from("nodes")
+    .insert({
+      project_id: projectId,
+      display_label: clean,
+      node_date: `${date}T09:00:00Z`,
+      origin: "manual",
+      state: "promoted",
+    })
+    .select("id")
+    .single();
   if (error) return { error: error.message };
-
-  revalidatePath("/layer1");
-  return {};
+  return { id: data.id };
 }
 
 // ---- Tag management (categories + values) --------------------------------
+// These run inside the ManageTags modal, which calls router.refresh() itself
+// after closing — so the catalog reloads in one shot rather than on every
+// keystroke. No revalidatePath needed here either.
 export async function createCategory(name: string, sortOrder: number): Promise<{ error?: string }> {
   const clean = name.trim();
   if (!clean) return { error: "Category name is required." };
@@ -130,7 +245,6 @@ export async function createCategory(name: string, sortOrder: number): Promise<{
     is_hide_filter: false,
   });
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -140,7 +254,6 @@ export async function renameCategory(id: string, name: string): Promise<{ error?
   const supabase = await createClient();
   const { error } = await supabase.from("tag_categories").update({ name: clean }).eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -148,7 +261,6 @@ export async function setCategoryHide(id: string, isHide: boolean): Promise<{ er
   const supabase = await createClient();
   const { error } = await supabase.from("tag_categories").update({ is_hide_filter: isHide }).eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -156,7 +268,6 @@ export async function deleteCategory(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("tag_categories").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -172,7 +283,6 @@ export async function createTagValue(
     .from("tag_values")
     .insert({ category_id: categoryId, value: clean, color });
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -190,7 +300,6 @@ export async function updateTagValue(
   const supabase = await createClient();
   const { error } = await supabase.from("tag_values").update(patch).eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -198,7 +307,6 @@ export async function deleteTagValue(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("tag_values").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -222,11 +330,13 @@ export async function toggleProjectTag(
         .eq("tag_value_id", valueId)
     : await supabase.from("project_tag_values").insert({ project_id: projectId, tag_value_id: valueId });
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
-// Toggle a tag on a node (add if absent, remove if present).
+// Toggle a tag on a node (add if absent, remove if present). New tags land at
+// the end of the order (max position + 1); position 0 = primary (drives the
+// node fill on Layer 1). Removing a tag leaves a gap in positions — fine,
+// since order is only used for sorting, not as a contiguous index.
 export async function toggleNodeTag(
   nodeId: string,
   valueId: string
@@ -238,11 +348,58 @@ export async function toggleNodeTag(
     .eq("node_id", nodeId)
     .eq("tag_value_id", valueId)
     .maybeSingle();
-  const { error } = existing
-    ? await supabase.from("node_tag_values").delete().eq("node_id", nodeId).eq("tag_value_id", valueId)
-    : await supabase.from("node_tag_values").insert({ node_id: nodeId, tag_value_id: valueId });
+  if (existing) {
+    const { error } = await supabase
+      .from("node_tag_values")
+      .delete()
+      .eq("node_id", nodeId)
+      .eq("tag_value_id", valueId);
+    if (error) return { error: error.message };
+    return {};
+  }
+  const { data: rows } = await supabase
+    .from("node_tag_values")
+    .select("position")
+    .eq("node_id", nodeId);
+  const nextPos =
+    rows && rows.length
+      ? Math.max(...rows.map((r: { position: number }) => r.position)) + 1
+      : 0;
+  const { error } = await supabase
+    .from("node_tag_values")
+    .insert({ node_id: nodeId, tag_value_id: valueId, position: nextPos });
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
+  return {};
+}
+
+// Toggle a tag on an ambition (add if absent, remove if present).
+export async function toggleAmbitionTag(
+  ambitionId: string,
+  valueId: string
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("ambition_tag_values")
+    .select("tag_value_id")
+    .eq("ambition_id", ambitionId)
+    .eq("tag_value_id", valueId)
+    .maybeSingle();
+  const { error } = existing
+    ? await supabase.from("ambition_tag_values").delete().eq("ambition_id", ambitionId).eq("tag_value_id", valueId)
+    : await supabase.from("ambition_tag_values").insert({ ambition_id: ambitionId, tag_value_id: valueId });
+  if (error) return { error: error.message };
+  return {};
+}
+
+// Set (or clear, with null) a project's colour. Null falls back to the
+// origin colour (green for Gmail, blue for manual).
+export async function setProjectColor(
+  projectId: string,
+  color: string | null
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("projects").update({ color }).eq("id", projectId);
+  if (error) return { error: error.message };
   return {};
 }
 
@@ -252,7 +409,6 @@ export async function deleteNode(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("nodes").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -268,7 +424,6 @@ export async function archiveProject(id: string): Promise<{ error?: string }> {
     })
     .eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -278,7 +433,6 @@ export async function deleteProject(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("projects").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -297,11 +451,10 @@ export async function createNote(
     .select("id")
     .single();
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return { id: data.id };
 }
 
-// Drag reposition — no revalidate (kept optimistic on the client for smoothness).
+// Drag reposition — kept optimistic on the client for smoothness.
 export async function updateNotePosition(id: string, x: number, y: number): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("notes").update({ x, y }).eq("id", id);
@@ -313,7 +466,6 @@ export async function updateNoteBody(id: string, body: string): Promise<{ error?
   const supabase = await createClient();
   const { error } = await supabase.from("notes").update({ body }).eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -321,7 +473,6 @@ export async function deleteNote(id: string): Promise<{ error?: string }> {
   const supabase = await createClient();
   const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/layer1");
   return {};
 }
 
@@ -333,7 +484,5 @@ export async function toggleAmbition(
   const supabase = await createClient();
   const { error } = await supabase.from("ambitions").update({ done }).eq("id", id);
   if (error) return { error: error.message };
-
-  revalidatePath("/layer1");
   return {};
 }

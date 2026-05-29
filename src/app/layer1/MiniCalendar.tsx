@@ -17,10 +17,12 @@ export default function MiniCalendar({
   value,
   onChange,
   minDate,
+  maxDate,
 }: {
   value: string;
   onChange: (isoDate: string) => void;
   minDate?: string; // ISO yyyy-mm-dd; days before this are disabled
+  maxDate?: string; // ISO yyyy-mm-dd; days after this are disabled
 }) {
   const selected = value || iso(new Date());
   const selDate = new Date(selected + "T00:00:00");
@@ -40,25 +42,25 @@ export default function MiniCalendar({
   const today = iso(new Date());
 
   return (
-    <div className="rounded-md border border-zinc-700 bg-zinc-950 p-2">
+    <div className="rounded-md border border-hairline bg-paper p-2">
       <div className="mb-2 flex items-center justify-between">
         <button
           type="button"
           onClick={() => setView(new Date(year, month - 1, 1))}
-          className="rounded px-2 py-0.5 text-zinc-300 hover:bg-zinc-800"
+          className="rounded px-2 py-0.5 text-ink hover:bg-paper-surface"
         >
           ‹
         </button>
-        <span className="text-sm font-medium text-zinc-100">{monthLabel}</span>
+        <span className="brand-serif text-sm text-ink">{monthLabel}</span>
         <button
           type="button"
           onClick={() => setView(new Date(year, month + 1, 1))}
-          className="rounded px-2 py-0.5 text-zinc-300 hover:bg-zinc-800"
+          className="rounded px-2 py-0.5 text-ink hover:bg-paper-surface"
         >
           ›
         </button>
       </div>
-      <div className="mb-1 grid grid-cols-7 gap-0.5 text-center text-[10px] text-zinc-500">
+      <div className="mb-1 grid grid-cols-7 gap-0.5 text-center text-[10px] text-muted">
         {WEEKDAYS.map((w) => (
           <div key={w}>{w}</div>
         ))}
@@ -69,7 +71,7 @@ export default function MiniCalendar({
           const cellIso = iso(new Date(year, month, d));
           const isSel = cellIso === selected;
           const isToday = cellIso === today;
-          const disabled = minDate ? cellIso < minDate : false;
+          const disabled = (minDate ? cellIso < minDate : false) || (maxDate ? cellIso > maxDate : false);
           return (
             <button
               type="button"
@@ -78,12 +80,12 @@ export default function MiniCalendar({
               onClick={() => !disabled && onChange(cellIso)}
               className={`h-7 rounded text-xs ${
                 disabled
-                  ? "cursor-not-allowed text-zinc-700"
+                  ? "cursor-not-allowed text-hairline"
                   : isSel
-                    ? "bg-zinc-100 font-medium text-zinc-900"
+                    ? "bg-oxblood font-medium text-paper"
                     : isToday
-                      ? "bg-zinc-800 text-zinc-100"
-                      : "text-zinc-300 hover:bg-zinc-800"
+                      ? "bg-paper-surface text-ink"
+                      : "text-ink hover:bg-paper-surface"
               }`}
             >
               {d}

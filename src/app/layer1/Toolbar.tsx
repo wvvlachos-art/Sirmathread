@@ -35,7 +35,7 @@ function WandIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-export default function Toolbar({ categories }: { categories: TagCat[] }) {
+export default function Toolbar({ categories, hiddenCount }: { categories: TagCat[]; hiddenCount: number }) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -50,8 +50,32 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
       if (v === null || v === "") params.delete(k);
       else params.set(k, v);
     }
-    router.push(`${pathname}?${params.toString()}`);
+    const qs = params.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
   };
+
+  // Clear every filter back to the default view (keeps sort/dir).
+  const clearFilters = () =>
+    update({
+      tags: null,
+      hide_completed: null,
+      inactive_only: null,
+      deadline: null,
+      show_archived: null,
+      show_hidden: null,
+    });
+
+  // Reveal absolutely everything, archived + spam/low-priority included (used by the
+  // "N hidden — show all" pill).
+  const showEverything = () =>
+    update({
+      tags: null,
+      hide_completed: null,
+      inactive_only: null,
+      deadline: null,
+      show_archived: "1",
+      show_hidden: "1",
+    });
 
   // --- Arrange usage counts (reorders the sort menu) ---
   const [arrangeCounts, setArrangeCounts] = useState<Record<string, number>>({});
@@ -98,6 +122,9 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   const selectedTags = (sp.get("tags") ?? "").split(",").filter(Boolean);
   const showHidden = sp.get("show_hidden") === "1";
   const hasHide = categories.some((c) => c.isHide);
+  // Anything that makes the view differ from the clean default.
+  const anyFilter =
+    selectedTags.length > 0 || deadline === "all" || hideCompleted || inactiveOnly || showArchived || showHidden;
 
   const toggleTagParam = (id: string) => {
     const set = new Set(selectedTags);
@@ -166,22 +193,27 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   const quickOpts = allOpts
     .filter((o) => (filterCounts[o.id] ?? 0) > 0)
     .sort((a, b) => (filterCounts[b.id] ?? 0) - (filterCounts[a.id] ?? 0))
-    .slice(0, 3);
+    .slice(0, 2);
 
-  const selectCls = "rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200";
-  const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4";
-  const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl";
-
+  // Compact control style for the Arrange select + asc/desc button — sits flush
+  // with the editorial rail, hairline edge, paper fill.
+  const selectCls = "rounded-[7px] border border-hairline bg-paper px-2 py-1 text-sm text-ink hover:bg-paper-surface";
+  const overlay = "fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4";
+  const card = "max-h-[80vh] w-full max-w-md overflow-auto rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl";
+  // Zone-header style: serif italic in oxblood, sentence case (not all-caps).
+  const zone = "brand-serif italic text-[12px] text-oxblood";
+  // Editorial pill: paper bg, hairline-y border, muted ink. Active = oxblood.
   const chip = (o: FilterOpt, removable: boolean) => (
     <button
       key={o.id}
       onClick={o.toggle}
       title={removable ? "Remove filter" : o.isActive ? "Active — click to remove" : "Apply filter"}
-      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+      className="flex items-center gap-1 px-2 py-0.5 text-xs"
       style={{
-        background: o.isActive ? o.color ?? "#3f3f46" : "transparent",
-        color: o.isActive ? "#fff" : "#d4d4d8",
-        border: `1px solid ${o.color ?? "#52525b"}`,
+        background: o.isActive ? o.color ?? "var(--oxblood)" : "var(--paper)",
+        color: o.isActive ? "#fff" : "var(--pill-ink)",
+        border: `1px solid ${o.isActive ? (o.color ?? "var(--oxblood)") : "var(--pill-edge)"}`,
+        borderRadius: 9,
       }}
     >
       {o.label}
@@ -190,10 +222,10 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-zinc-800 px-6 py-2.5">
-      {/* Arrange */}
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t-2 border-t-oxblood border-b border-b-hairline bg-paper-surface px-6 py-2.5">
+      {/* Arrange zone */}
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Arrange</span>
+        <span className={zone}>Arrange</span>
         <select
           className={selectCls}
           value={sort}
@@ -211,45 +243,75 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
         </select>
         <button
           onClick={() => update({ dir: dir === "asc" ? "desc" : "asc" })}
-          className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 hover:bg-zinc-800"
+          className={selectCls}
           title={dir === "asc" ? "Ascending" : "Descending"}
         >
           {dir === "asc" ? "↑" : "↓"}
         </button>
       </div>
 
-      {/* Filters: button + quick-select + active chips */}
+      {/* Hairline zone divider */}
+      <div className="h-[18px] w-px bg-hairline" />
+
+      {/* Filter zone */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Filter</span>
+        <span className={zone}>Filter</span>
         <button onClick={() => setFiltersOpen(true)} className={selectCls}>
           Filters{activeOpts.length ? ` (${activeOpts.length})` : ""} ▾
         </button>
 
-        {/* quick-select: your most-used filters */}
-        {quickOpts.length > 0 && (
-          <>
-            <span className="text-[10px] uppercase tracking-wide text-zinc-600">Quick</span>
-            {quickOpts.map((o) => chip(o, false))}
-          </>
+        {/* one-click clear, shown whenever the view is filtered */}
+        {anyFilter && (
+          <button
+            onClick={clearFilters}
+            title="Clear all filters"
+            className="text-xs text-muted hover:text-oxblood"
+          >
+            Clear ✕
+          </button>
         )}
 
+        {/* quick-select: your most-used filters */}
+        {quickOpts.length > 0 && quickOpts.map((o) => chip(o, false))}
+
         {/* active filters as removable chips */}
-        {activeOpts.length > 0 && <span className="text-zinc-700">|</span>}
+        {activeOpts.length > 0 && quickOpts.length > 0 && <span className="text-hairline">·</span>}
         {activeOpts.map((o) => chip(o, true))}
+
+        {/* how many projects are currently held back, with a one-click escape hatch */}
+        {hiddenCount > 0 && (
+          <button
+            onClick={showEverything}
+            title="Some projects are hidden by the current filters (including archived and spam/low-priority). Click to show every project."
+            className="flex items-center gap-1 rounded-full border border-oxblood/60 bg-oxblood/10 px-2 py-0.5 text-xs text-oxblood hover:bg-oxblood/20"
+          >
+            {hiddenCount} hidden <span className="font-medium underline">show all</span>
+          </button>
+        )}
       </div>
 
-      {/* Tags: manage + magic wand */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Tags</span>
-        <button onClick={() => setManageOpen(true)} className={selectCls}>
+      {/* Flexible spacer pushes Tags zone to the right edge */}
+      <div className="flex-1" />
+
+      {/* Hairline zone divider */}
+      <div className="h-[18px] w-px bg-hairline" />
+
+      {/* Tags zone (right-aligned) */}
+      <div className="flex items-center gap-3">
+        <span className={zone}>Tags</span>
+        <button
+          onClick={() => setManageOpen(true)}
+          className="text-sm text-ink hover:text-oxblood"
+        >
           Manage
         </button>
         <button
           onClick={() => (armed ? setArmed(null) : setWandOpen(true))}
           title={armed ? "Put the wand down (Esc)" : "Magic wand — stamp a tag onto things"}
-          className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm ${
-            armed ? "border-blue-400 bg-blue-600 text-white" : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+          className={`flex items-center gap-1 px-2 py-1 text-sm ${
+            armed ? "bg-oxblood text-paper" : "bg-transparent text-oxblood hover:bg-oxblood/10"
           }`}
+          style={{ border: `0.5px solid var(--oxblood)`, borderRadius: 7 }}
         >
           <WandIcon />
           {armed ? `${armed.value} ✕` : ""}
@@ -260,18 +322,18 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
       {filtersOpen && (
         <div className={overlay} onClick={() => setFiltersOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-3 text-lg font-semibold text-zinc-100">Filters</h2>
+            <h2 className="brand-serif mb-3 text-lg text-oxblood">Filters</h2>
 
             <div className="mb-4">
-              <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Status &amp; deadline</div>
+              <div className="mb-2 text-[10px] uppercase tracking-wide text-muted">Status &amp; deadline</div>
               <div className="flex flex-wrap gap-1">{flagOpts.map((o) => chip(o, false))}</div>
             </div>
 
-            <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">Tags</div>
-            {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+            <div className="mb-2 text-[10px] uppercase tracking-wide text-muted">Tags</div>
+            {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
             {categories.map((c) => (
               <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
                   {c.name}
                   {c.isHide ? " · hidden by default" : ""}
                 </div>
@@ -284,26 +346,21 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
               </div>
             ))}
             {hasHide && (
-              <label className="mt-1 flex items-center gap-1.5 text-sm text-zinc-300">
+              <label className="mt-1 flex items-center gap-1.5 text-sm text-ink">
                 <input type="checkbox" checked={showHidden} onChange={(e) => update({ show_hidden: e.target.checked ? "1" : null })} />
                 Show spam / low-priority
               </label>
             )}
 
-            <div className="mt-4 flex justify-between">
-              {activeOpts.length > 0 ? (
-                <button
-                  onClick={() =>
-                    update({ tags: null, hide_completed: null, show_archived: null, inactive_only: null, deadline: null, show_hidden: null })
-                  }
-                  className="text-sm text-zinc-400 hover:text-zinc-200"
-                >
-                  Clear all
-                </button>
-              ) : (
-                <span />
-              )}
-              <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200">
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-hairline pt-4">
+              <button
+                onClick={clearFilters}
+                title="Clear every filter back to the default view"
+                className="rounded-md border border-hairline bg-paper px-3 py-2 text-sm font-medium text-ink hover:bg-paper-surface"
+              >
+                Clear all filters
+              </button>
+              <button onClick={() => setFiltersOpen(false)} className="rounded-md bg-oxblood px-4 py-2 text-sm font-medium text-paper hover:bg-oxblood-dark">
                 Done
               </button>
             </div>
@@ -315,14 +372,14 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
       {wandOpen && !armed && (
         <div className={overlay} onClick={() => setWandOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="mb-1 flex items-center gap-2 text-lg font-semibold text-zinc-100">
+            <h2 className="brand-serif mb-1 flex items-center gap-2 text-lg text-oxblood">
               <WandIcon size={18} /> Magic wand
             </h2>
-            <p className="mb-3 text-sm text-zinc-400">Load a tag, then click nodes/projects to stamp it on. Esc to stop.</p>
-            {categories.length === 0 && <p className="text-xs text-zinc-500">No tags yet.</p>}
+            <p className="mb-3 text-sm text-muted">Load a tag, then click nodes/projects to stamp it on. Esc to stop.</p>
+            {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
             {categories.map((c) => (
               <div key={c.id} className="mb-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">{c.name}</div>
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
                 <div className="flex flex-wrap gap-1">
                   {c.values.map((v) => (
                     <button
@@ -331,7 +388,7 @@ export default function Toolbar({ categories }: { categories: TagCat[] }) {
                         setArmed({ id: v.id, value: v.value, color: v.color });
                         setWandOpen(false);
                       }}
-                      className="rounded-full px-2 py-0.5 text-xs text-zinc-100"
+                      className="rounded-full px-2 py-0.5 text-xs text-ink"
                       style={{ border: `1px solid ${v.color}`, background: `${v.color}33` }}
                     >
                       {v.value}

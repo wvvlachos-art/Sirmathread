@@ -36,15 +36,15 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
     else router.refresh();
   };
 
-  const input = "rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-zinc-500";
+  const input = "rounded border border-hairline bg-paper px-2 py-1 text-sm text-ink outline-none focus:border-oxblood";
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => !busy && onClose()}>
-      <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
-        <h2 className="mb-4 text-lg font-semibold text-zinc-100">Manage tags</h2>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && onClose()}>
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl">
+        <h2 className="brand-serif mb-4 text-lg text-oxblood">Manage tags</h2>
 
         {categories.map((c) => (
-          <div key={c.id} className="mb-4 rounded-lg border border-zinc-800 p-3">
+          <div key={c.id} className="mb-4 rounded-lg border border-hairline bg-paper p-3">
             <div className="mb-2 flex items-center gap-2">
               <input
                 key={`name-${c.id}-${c.name}`}
@@ -52,7 +52,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                 onBlur={(e) => e.target.value.trim() && e.target.value !== c.name && act(renameCategory(c.id, e.target.value))}
                 className={`${input} flex-1 font-medium`}
               />
-              <label className="flex items-center gap-1 text-xs text-zinc-400" title="Projects with this tag are hidden by default">
+              <label className="flex items-center gap-1 text-xs text-muted" title="Projects with this tag are hidden by default">
                 <input type="checkbox" checked={c.isHide} onChange={(e) => act(setCategoryHide(c.id, e.target.checked))} />
                 hide
               </label>
@@ -61,7 +61,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                   if (confirm(`Delete category "${c.name}" and its ${c.values.length} value(s)? Projects/nodes will lose these tags.`))
                     act(deleteCategory(c.id));
                 }}
-                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-zinc-800"
+                className="rounded px-2 py-1 text-xs text-oxblood hover:bg-paper-surface"
               >
                 Delete
               </button>
@@ -74,7 +74,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                     type="color"
                     defaultValue={v.color}
                     onBlur={(e) => e.target.value !== v.color && act(updateTagValue(v.id, { color: e.target.value }))}
-                    className="h-6 w-8 cursor-pointer rounded border border-zinc-700 bg-transparent"
+                    className="h-6 w-8 cursor-pointer rounded border border-hairline bg-transparent"
                   />
                   <input
                     key={`val-${v.id}-${v.value}`}
@@ -87,7 +87,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                       if (confirm(`Delete tag "${v.value}"? It will be removed from any projects/nodes using it.`))
                         act(deleteTagValue(v.id));
                     }}
-                    className="rounded px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-red-400"
+                    className="rounded px-2 text-xs text-muted hover:bg-paper-surface hover:text-oxblood"
                   >
                     ✕
                   </button>
@@ -101,7 +101,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                 type="color"
                 value={newColors[c.id] ?? PALETTE[c.values.length % PALETTE.length]}
                 onChange={(e) => setNewColors((p) => ({ ...p, [c.id]: e.target.value }))}
-                className="h-6 w-8 cursor-pointer rounded border border-zinc-700 bg-transparent"
+                className="h-6 w-8 cursor-pointer rounded border border-hairline bg-transparent"
               />
               <input
                 value={newVals[c.id] ?? ""}
@@ -121,7 +121,7 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
                   act(createTagValue(c.id, newVals[c.id], newColors[c.id] ?? PALETTE[c.values.length % PALETTE.length]));
                   setNewVals((p) => ({ ...p, [c.id]: "" }));
                 }}
-                className="rounded bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-50"
+                className="rounded bg-oxblood px-3 py-1 text-xs font-medium text-paper hover:bg-oxblood-dark disabled:opacity-50"
               >
                 Add
               </button>
@@ -149,14 +149,14 @@ export default function ManageTags({ categories, onClose }: { categories: Cat[];
               act(createCategory(newCat, categories.length));
               setNewCat("");
             }}
-            className="rounded bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-50"
+            className="rounded bg-oxblood px-3 py-1 text-sm font-medium text-paper hover:bg-oxblood-dark disabled:opacity-50"
           >
             Add category
           </button>
         </div>
 
         <div className="mt-5 flex justify-end">
-          <button onClick={onClose} className="rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+          <button onClick={onClose} className="rounded-md border border-hairline px-4 py-2 text-sm text-ink hover:bg-paper">
             Close
           </button>
         </div>

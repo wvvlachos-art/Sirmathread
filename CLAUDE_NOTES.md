@@ -218,6 +218,26 @@ Three jobs run on a schedule via **Netlify Scheduled Functions** (or fall back t
 
 Soft-delete sweeper (also daily): any bubble/note with `deleted_at < now() - 7 days` gets hard-deleted from the DB. The 5-second toast undo is enforced client-side; the 7-day window is server-side garbage collection in case the toast was dismissed without a hard-delete signal reaching the server.
 
+## Visual system (locked 2026-05-28)
+
+**VISUAL IDENTITY:** "Kraft & oxblood" — warm manila/kraft paper background (~#e7dcc4), deep oxblood-red as the signature accent (~#7a2718), serif headings (Georgia-class serif) for brand + project names, clean sans for small node labels. This is a deliberate move AWAY from generic dark-mode SaaS and away from Anthropic's own cream/serif look. The paper is warm manila, not cream; the accent is oxblood, which Anthropic never uses.
+
+**NODE COLOR SYSTEM** (three independent channels, no conflicts):
+- **FILL = tag.** Untagged node = default paper-cream fill with oxblood outline. One tag = whole node takes that tag's color. Multiple tags = node takes the PRIMARY tag's color as fill, and each ADDITIONAL tag shows as a thin colored base bar beneath the node.
+- **BASE BARS = additional (non-primary) tags only.** Spaced apart (~3px gap between bars, ~3px below the node) so they never touch or merge. Bars fade out at zoomed-out spans (3m/6m) where nodes shrink — lens becomes the only node-tag readout at those zooms.
+- **PERIMETER = deadline.** A snug red border that hugs the node's rounded-rectangle edge (no floating gap). Proportional 4-stage fill: runway = time between `deadline_set_at` and `deadline`, divided into quarters. As each quarter of runway elapses, the red border advances one segment clockwise from top: stage1 = top edge, stage2 = top+right, stage3 = top+right+bottom, stage4 = full border. Due and overdue both show the full border (no extra escalation).
+- **COMPLETED:** when a deadline node is ticked complete, the red border clears entirely and the node returns to plain tag-colored state, with a small check mark (likely replacing the inner dot).
+
+**ORIGIN COLOR: REMOVED.** We no longer color nodes green (Gmail) vs blue (manual). Origin is no longer a node-fill signal. (If origin is ever needed, it lives in the node detail panel, not on the node body.)
+
+**TAG MODEL:** one shared tag vocabulary (Model A), appliable to either a project OR a node. Project tags display as readable pills under the project name in the frozen left column. Node tags display via the fill/bars system above.
+
+**TAG LENS:** node tags are explored via a "lens" / highlight mode. User picks a tag (reusing the existing magic-wand mechanism) → every node carrying that tag glows across ALL lanes, everything else dims. Turn off → canvas returns to calm. Works at every zoom level. This is the primary way to see node tags across the canvas; bars are the at-a-glance per-node readout.
+
+**NODE-TYPE ICONS:** optional, default BLANK. A node is born plain. User may optionally assign a type (email / decision / meeting / payment / deadline / etc.) via a picker, which shows a small line icon. Never required. (AI auto-typing deferred until the paste-to-generate feature, which is on hold pending IP waiver.)
+
+**AMBITIONS:** unchanged — dashed-outline circles on dashed wires, representing future/planned events.
+
 ## Status
 
 **2026-05-25 (session 1, final):** Design phase complete. Two-layer model locked. Stack confirmed: Next.js + Netlify + Supabase + Anthropic SDK. Domain sirmathread.com purchased on Porkbun. Anthropic API key created and stored by William. All major design decisions captured in this file. **Status: ready to bootstrap. Next session: scaffold the Next.js project, set up Supabase schema, ship a deployable "hello sirmathread" page on Netlify with the Anthropic SDK wired in.**
