@@ -2855,10 +2855,17 @@ export default function Timeline({
             {!projConfirm ? (
               <>
                 <h2 className="brand-serif mb-1 text-lg text-oxblood">{projMenu.name}</h2>
-                <p className="mb-4 text-sm text-muted">
+                <p className="mb-3 text-sm text-muted">
                   {projMenu.nodeCount} node{projMenu.nodeCount === 1 ? "" : "s"} ·{" "}
                   {projMenu.ambitionCount} ambition{projMenu.ambitionCount === 1 ? "" : "s"}
                 </p>
+
+                <a
+                  href={`/project/${projMenu.id}`}
+                  className="mb-5 inline-flex items-center gap-1 rounded-md bg-oxblood px-3 py-1.5 text-sm font-medium text-paper hover:bg-oxblood-dark"
+                >
+                  Open detail view →
+                </a>
 
                 <p className="mb-2 text-xs uppercase tracking-wide text-muted">Wire colour</p>
                 <div className="mb-5 flex flex-wrap items-center gap-2">
