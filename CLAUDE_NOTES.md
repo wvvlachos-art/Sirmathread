@@ -250,3 +250,38 @@ Soft-delete sweeper (also daily): any bubble/note with `deleted_at < now() - 7 d
 - Layer 1 swim-lanes will need vertical scrolling once projects exceed ~6. Plan for it from the start.
 - SVG drag math: convert client coords → SVG coords via `getScreenCTM().inverse()`. Already working in the mockup.
 - William knows zero code. Every change goes through Claude. Keep WILLIAM_NOTES.md plain-English.
+
+## Layer 2 — dedicated project page (`/project/[id]`)
+
+**Navigation.** Layer 1 → Layer 2: click a project's **name** in the left rail
+(direct link), or its settings menu → **Open detail view →**. Layer 2 → Layer 1:
+the **← Overview** link (and browser back). Direct URLs are shareable.
+
+**Access control.** The page loads the project through the normal RLS-scoped
+query; a user who isn't a member of the project's workspace gets `null` →
+`notFound()` (clean 404, no data leak). `canEdit` = the user's membership role is
+owner/member (viewers are read-only — no "+", no edit).
+
+**Serpentine layout (Layer2Canvas).** Time flows ALONG THE THREAD, not the
+horizontal axis. ≤8 nodes that fit on one row → centered linear chain; otherwise
+a downward snake whose rows alternate L→R / R→L, joined by rounded
+(quadratic-bezier, ~30px) curve transitions; the page scrolls vertically. Rows
+fill to the canvas edges before wrapping. **Spacing is time-aware:** distance =
+`clamp(MIN + LOG_FACTOR·ln(1+gapDays), MIN, MAX)` so bursts cluster and quiet
+stretches open up. Gaps > 14 days get an italic "~N weeks later" annotation. (A
+soft month band down the left is specced but deferred pending a visual pass.)
+
+**Context bubbles (`bubbles` table).** Reshaped from the old empty placeholder.
+Columns used: `organization_id` (RLS), `project_id`, `node_id`, `bubble_type`
+('context' | 'insight'), `source` ('manual' | 'ai'), `content`, `position_side`
+('above' | 'below'), `position_offset` (reserved for future drag), timestamps,
+`created_by_user_id`. RLS: read = org member, write = org owner/member (same
+pattern as other content tables). Bubbles render as margin notes (dusty-blue edge
+bar, "CONTEXT · YOU" label, italic serif, dashed connector, slight alternating
+rotation); they alternate above/below per node and stack outward. CRUD via
+`src/app/project/[id]/actions.ts`, logged as `bubble.created/.edited/.deleted`.
+
+**Reserved for post-IP-waiver (DO NOT BUILD YET):** AI-generated bubbles
+(`source='ai'`, oxblood styling, "CONTEXT · AI" label) and **insight** bubbles
+(`bubble_type='insight'`). The enums/columns exist so they slot in with no
+schema rework; only manual context bubbles are created/rendered in v1.

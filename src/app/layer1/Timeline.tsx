@@ -1312,12 +1312,14 @@ export default function Timeline({
                           style={{ background: attentionColorOf(p.attention) }}
                           aria-hidden
                         />
-                        <span
-                          className="brand-serif line-clamp-2 min-w-0 flex-1 text-sm leading-tight text-ink"
-                          title={p.name}
+                        <a
+                          href={`/project/${p.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="brand-serif line-clamp-2 min-w-0 flex-1 text-sm leading-tight text-ink hover:text-oxblood hover:underline"
+                          title={`Open ${p.name}`}
                         >
                           {p.name}
-                        </span>
+                        </a>
                         {p.nodes.length > 0 && (
                           <button
                             onClick={(e) => {
