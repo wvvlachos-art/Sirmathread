@@ -61,17 +61,23 @@ type DbProject = {
 const DAY = 86_400_000;
 const INACTIVE_DAYS = 45;
 
+// 0 = no deadline. 1..4 = perimeter-border stages (top edge → full ring).
+// Fallbacks: missing `setAt` → treat as deadline - 30 days (legacy rows).
+// `setAt >= deadline` (data error) → stage 4. Past deadline → stage 4 (overdue).
 function deadlineStage(deadline: string | null, setAt: string | null): number {
   if (!deadline) return 0;
   const end = new Date(deadline).getTime();
   const now = Date.now();
-  if (now >= end) return 100;
-  if (!setAt) return 0;
-  const start = new Date(setAt).getTime();
-  if (start >= end) return 0;
+  if (now >= end) return 4;
+  const start = setAt
+    ? new Date(setAt).getTime()
+    : end - 30 * 86_400_000;
+  if (start >= end) return 4;
   const frac = (now - start) / (end - start);
-  if (frac <= 0) return 0;
-  return Math.min(100, Math.floor(frac * 4) * 25);
+  if (frac < 0.25) return 1;
+  if (frac < 0.5) return 2;
+  if (frac < 0.75) return 3;
+  return 4;
 }
 
 export default async function Layer1Page({
@@ -264,11 +270,11 @@ export default async function Layer1Page({
     );
     // Attention status drives the dot before the project name.
     // - inactive: faded gray (the 45-day quiet threshold)
-    // - alert: at least one node has a deadline at stage 3 (75%+) or overdue
+    // - alert: at least one node has a deadline at stage 3 (≥50% elapsed) or worse
     // - normal: active, nothing urgent
     let attention: "inactive" | "alert" | "normal" = inactive ? "inactive" : "normal";
     if (!inactive) {
-      const hasUrgent = nodes.some((n) => n.deadline && !n.done && n.stage >= 75);
+      const hasUrgent = nodes.some((n) => n.deadline && !n.done && n.stage >= 3);
       if (hasUrgent) attention = "alert";
     }
 

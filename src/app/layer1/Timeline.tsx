@@ -117,6 +117,39 @@ const MAX_SPAN_DAYS = 5 * 365;
 const INITIAL_BACK = 120;
 const INITIAL_FWD = 60;
 
+// Rounded-rect perimeter for the deadline border, in the NODE × NODE coordinate
+// space. Starts at the top-left corner exit and traces clockwise — top edge,
+// top-right corner, right edge, etc. Combined with pathLength={4} and
+// strokeDasharray="N 4", N ∈ 1..4 reveals one quarter of the perimeter per
+// stage, so the border grows clockwise from the top as the deadline approaches.
+const NODE_RX = 7;
+const NODE_PERIMETER_PATH =
+  `M ${NODE_RX} 0 H ${NODE - NODE_RX} ` +
+  `A ${NODE_RX} ${NODE_RX} 0 0 1 ${NODE} ${NODE_RX} ` +
+  `V ${NODE - NODE_RX} ` +
+  `A ${NODE_RX} ${NODE_RX} 0 0 1 ${NODE - NODE_RX} ${NODE} ` +
+  `H ${NODE_RX} ` +
+  `A ${NODE_RX} ${NODE_RX} 0 0 1 0 ${NODE - NODE_RX} ` +
+  `V ${NODE_RX} ` +
+  `A ${NODE_RX} ${NODE_RX} 0 0 1 ${NODE_RX} 0 Z`;
+// Check mark for completed-with-deadline nodes (centred-ish in NODE space).
+const CHECK_PATH = "M 14 24 L 22 32 L 36 16";
+// At zooms above this many days/screen, the 4-stage detail is unreadable —
+// collapse to a single full red ring.
+const PERIMETER_STAGES_MAX_DAYS = 30;
+
+// Ambition perimeter path: same idea as nodes, but a full circle. Four 90°
+// arcs starting at 12 o'clock and going clockwise (12→3→6→9→12). With
+// pathLength={4} and dasharray "N 4" we reveal N quarters from the top.
+// The {cx, cy} placeholders are replaced per-ambition since circle centres
+// aren't anchored to (0,0).
+const ambPerimeterPath = (cx: number, cy: number, r: number) =>
+  `M ${cx} ${cy - r} ` +
+  `A ${r} ${r} 0 0 1 ${cx + r} ${cy} ` +
+  `A ${r} ${r} 0 0 1 ${cx} ${cy + r} ` +
+  `A ${r} ${r} 0 0 1 ${cx - r} ${cy} ` +
+  `A ${r} ${r} 0 0 1 ${cx} ${cy - r} Z`;
+
 // Compact relative time for the meta line under the project name.
 function relTimeAgo(iso: string | null, nowMs: number): string {
   if (!iso) return "—";
@@ -1344,18 +1377,6 @@ export default function Timeline({
                   </div>
 
                   <svg width={canvasW} height={laneH} className="border-b border-hairline" style={{ background: PAPER }}>
-                    <defs>
-                      {p.nodes.map((n) => (
-                        <clipPath key={n.id} id={`clip-${n.id}`}>
-                          <rect width={NODE} height={NODE} rx={7} ry={7} />
-                        </clipPath>
-                      ))}
-                      {p.ambitions.map((a) => (
-                        <clipPath key={`ac-${a.id}`} id={`aclip-${a.id}`}>
-                          <circle cx={xFor(a.t)} cy={centerY} r={AMB_R} />
-                        </clipPath>
-                      ))}
-                    </defs>
 
                     {months.map((m, i) => (
                       <line key={i} x1={m.x} y1={0} x2={m.x} y2={laneH} stroke={HAIRLINE} strokeOpacity={0.45} />
@@ -1439,32 +1460,60 @@ export default function Timeline({
                               //   0 tags  → cream fill + oxblood outline (default)
                               //   1+ tag  → fill = primary tag's colour, outline = darken(primary)
                               //   2+ tags → extras render as thin colour bars below the node
-                              // The oxblood "deadline stage fill" is suppressed when any tag
-                              // is applied (tag wins the fill; the deadline data still lives
-                              // in the node menu / upcoming panel).
+                              // Deadline urgency rides the perimeter as a red border that
+                              // grows clockwise from the top (4 stages → full ring). Tag fill
+                              // and deadline perimeter coexist without conflict — both render.
+                              // Completed-with-deadline nodes get a check mark in place of the
+                              // border.
                               const primaryTagId = ntags[0];
                               const primaryColor = primaryTagId ? tagColors[primaryTagId] : null;
                               const fill = primaryColor ?? NODE_FILL;
                               const stroke = primaryColor ? darken(primaryColor) : OXBLOOD;
-                              const showStageFill = !n.done && n.stage > 0 && !primaryColor;
+                              const showPerimeter = !n.done && n.stage > 0;
+                              const showCheck = n.done && !!n.deadline;
+                              const stagesReadable = daysPerScreen <= PERIMETER_STAGES_MAX_DAYS;
                               return (
                                 <g transform={`translate(${left}, ${top}) scale(${nodeScale})`}>
                                   <rect
                                     width={NODE}
                                     height={NODE}
-                                    rx={7}
-                                    ry={7}
+                                    rx={NODE_RX}
+                                    ry={NODE_RX}
                                     fill={fill}
                                     stroke={stroke}
                                     strokeWidth={1.25}
                                   />
-                                  {showStageFill && (
-                                    <rect
-                                      width={(NODE * n.stage) / 100}
-                                      height={NODE}
-                                      fill={OXBLOOD}
-                                      fillOpacity={0.85}
-                                      clipPath={`url(#clip-${n.id})`}
+                                  {showPerimeter && (
+                                    stagesReadable ? (
+                                      <path
+                                        d={NODE_PERIMETER_PATH}
+                                        pathLength={4}
+                                        fill="none"
+                                        stroke={ATTENTION_ALERT}
+                                        strokeWidth={3}
+                                        strokeDasharray={`${n.stage} 4`}
+                                        strokeLinecap="butt"
+                                      />
+                                    ) : (
+                                      <rect
+                                        width={NODE}
+                                        height={NODE}
+                                        rx={NODE_RX}
+                                        ry={NODE_RX}
+                                        fill="none"
+                                        stroke={ATTENTION_ALERT}
+                                        strokeWidth={3}
+                                      />
+                                    )
+                                  )}
+                                  {showCheck && (
+                                    <path
+                                      d={CHECK_PATH}
+                                      fill="none"
+                                      stroke={primaryColor ? "#ffffff" : OXBLOOD}
+                                      strokeWidth={3}
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
                                     />
                                   )}
                                   <title>
@@ -1628,17 +1677,39 @@ export default function Timeline({
                               strokeDasharray="4 3"
                             />
                             {a.isDeadline && !a.done && a.stage > 0 && (
-                              <rect
-                                x={cx - AMB_R}
-                                y={centerY - AMB_R}
-                                width={(2 * AMB_R * a.stage) / 100}
-                                height={2 * AMB_R}
-                                fill={OXBLOOD}
-                                fillOpacity={0.85}
-                                clipPath={`url(#aclip-${a.id})`}
+                              daysPerScreen <= PERIMETER_STAGES_MAX_DAYS ? (
+                                <path
+                                  d={ambPerimeterPath(cx, centerY, AMB_R)}
+                                  pathLength={4}
+                                  fill="none"
+                                  stroke={ATTENTION_ALERT}
+                                  strokeWidth={3}
+                                  strokeDasharray={`${a.stage} 4`}
+                                  strokeLinecap="butt"
+                                />
+                              ) : (
+                                <circle
+                                  cx={cx}
+                                  cy={centerY}
+                                  r={AMB_R}
+                                  fill="none"
+                                  stroke={ATTENTION_ALERT}
+                                  strokeWidth={3}
+                                />
+                              )
+                            )}
+                            {a.done && a.isDeadline && (
+                              <path
+                                d="M 14 24 L 22 32 L 36 16"
+                                transform={`translate(${cx - NODE / 2}, ${centerY - NODE / 2})`}
+                                fill="none"
+                                stroke={OXBLOOD}
+                                strokeWidth={3}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
                               />
                             )}
-                            {a.done && (
+                            {a.done && !a.isDeadline && (
                               <text x={cx} y={centerY + 5} fill={OXBLOOD} fontSize={16} textAnchor="middle">
                                 ✓
                               </text>
