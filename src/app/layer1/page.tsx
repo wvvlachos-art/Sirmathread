@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import SignOutButton from "../SignOutButton";
+import AccountMenu from "../account/AccountMenu";
+import { resolveActiveOrg, listMyOrgs } from "@/lib/activeOrg";
 import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
 import NewProjectButton from "./NewProjectButton";
@@ -92,6 +93,17 @@ export default async function Layer1Page({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  // Which workspace are we viewing? (cookie-backed switcher)
+  const activeOrg = await resolveActiveOrg(supabase, user.id);
+  const myOrgs = await listMyOrgs(supabase, user.id);
+  const { data: profileRow } = await supabase
+    .from("profiles")
+    .select("display_name")
+    .eq("id", user.id)
+    .maybeSingle();
+  const displayName =
+    ((profileRow?.display_name as string | undefined) ?? user.email?.split("@")[0]) || "You";
+
   const sort = sp.sort ?? "last_updated";
   const dir = sp.dir ?? "desc";
   const deadlineMode = sp.deadline ?? "";
@@ -103,12 +115,15 @@ export default async function Layer1Page({
 
   // Always fetch every real project (active + archived) so we can tell how many
   // are being held back by the current filters and report a "hidden" count.
-  const { data, error } = await supabase
+  let projectsQuery = supabase
     .from("projects")
     .select(
       "id, display_name, gmail_label_name, origin, color, spine_color, spine_color_is_user_set, deadline, deadline_set_at, done, state, created_at, updated_at, last_activity_at, project_tag_values(tag_value_id), nodes(id, display_label, deadline, deadline_set_at, done, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id, position)), ambitions(id, title, target_date, done, is_deadline, created_at), notes(id, node_id, body, x, y)"
     )
     .in("state", ["active", "archived"]);
+  // Scope the board to the active workspace.
+  if (activeOrg) projectsQuery = projectsQuery.eq("organization_id", activeOrg.id);
+  const { data, error } = await projectsQuery;
 
   if (error) {
     return (
@@ -131,10 +146,11 @@ export default async function Layer1Page({
   if (!showArchived) projects = projects.filter((p) => p.state !== "archived");
 
   // ---- Tag catalog ----
-  const { data: catData } = await supabase
+  let catQuery = supabase
     .from("tag_categories")
-    .select("id, name, is_hide_filter, sort_order, tag_values(id, value, color)")
-    .order("sort_order");
+    .select("id, name, is_hide_filter, sort_order, tag_values(id, value, color)");
+  if (activeOrg) catQuery = catQuery.eq("organization_id", activeOrg.id);
+  const { data: catData } = await catQuery.order("sort_order");
   const categories = (catData ?? []) as DbCategory[];
   const tagColors: Record<string, string> = {};
   const hideValueIds = new Set<string>();
@@ -330,8 +346,12 @@ export default async function Layer1Page({
         </div>
         <div className="flex items-center gap-4">
           <NewProjectButton />
-          <span className="text-sm text-muted">{user.email}</span>
-          <SignOutButton />
+          <AccountMenu
+            email={user.email ?? ""}
+            displayName={displayName}
+            activeOrgId={activeOrg?.id ?? null}
+            orgs={myOrgs.map((o) => ({ id: o.id, name: o.name, role: o.role }))}
+          />
         </div>
       </header>
 

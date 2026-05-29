@@ -18,8 +18,52 @@ const DAY_MS = 86_400_000;
 //
 // Failures are swallowed: a brand-new user shouldn't be blocked from reaching
 // the app because the demo seed hit a snag. Errors are logged server-side.
-export async function seedTutorialIfNeeded(userId: string): Promise<void> {
+// Ensure the user has a personal workspace (organization + owner membership).
+// Idempotent — returns the existing personal org if there is one. Called on
+// every sign-in from the auth callback, so brand-new signups get a workspace.
+export async function ensurePersonalOrg(userId: string): Promise<string | null> {
   try {
+    const { data: existing } = await supabaseAdmin
+      .from("organizations")
+      .select("id")
+      .eq("created_by_user_id", userId)
+      .limit(1)
+      .maybeSingle();
+    if (existing?.id) return existing.id as string;
+
+    const { data: prof } = await supabaseAdmin
+      .from("profiles")
+      .select("email")
+      .eq("id", userId)
+      .maybeSingle();
+    const local = (((prof?.email as string | undefined) ?? "").split("@")[0]) || "user";
+
+    const { data: org, error } = await supabaseAdmin
+      .from("organizations")
+      .insert({ name: `${local}'s workspace`, created_by_user_id: userId })
+      .select("id")
+      .single();
+    if (error || !org) {
+      console.error("[ensurePersonalOrg] org insert failed:", error?.message);
+      return null;
+    }
+    const { error: mErr } = await supabaseAdmin
+      .from("memberships")
+      .insert({ organization_id: org.id, user_id: userId, role: "owner" });
+    if (mErr) console.error("[ensurePersonalOrg] membership insert failed:", mErr.message);
+    return org.id as string;
+  } catch (e) {
+    console.error("[ensurePersonalOrg] unexpected:", e);
+    return null;
+  }
+}
+
+export async function seedTutorialIfNeeded(userId: string, orgId: string | null): Promise<void> {
+  try {
+    if (!orgId) {
+      console.error("[seedTutorial] no workspace for user; skipping seed");
+      return;
+    }
     const { data: pref, error: prefErr } = await supabaseAdmin
       .from("user_preferences")
       .select("tutorial_seeded")
@@ -33,7 +77,7 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
 
     // Build the tag value lookup: name (e.g. "Maya") -> tag_value_id.
     // Reuses any existing categories/values by name match.
-    const tagValueIdByName = await ensureTagCatalog(userId);
+    const tagValueIdByName = await ensureTagCatalog(userId, orgId);
 
     const now = Date.now();
     const isoAt = (dayOffset: number) =>
@@ -55,6 +99,8 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
         .from("projects")
         .insert({
           user_id: userId,
+          organization_id: orgId,
+          created_by_user_id: userId,
           display_name: tp.name,
           origin: "tutorial",
           gmail_label_name: null,
@@ -87,6 +133,8 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
       const sortedNodes = [...tp.nodes].sort((a, b) => a.dayOffset - b.dayOffset);
       const nodeRows = sortedNodes.map((n, idx) => ({
         project_id: project.id,
+        organization_id: orgId,
+        created_by_user_id: userId,
         display_label: n.title,
         node_date: isoAt(n.dayOffset),
         origin: "tutorial",
@@ -120,6 +168,8 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
       if (tp.ambitions?.length) {
         const ambRows = tp.ambitions.map((a) => ({
           project_id: project.id,
+          organization_id: orgId,
+          created_by_user_id: userId,
           title: a.title,
           target_date: isoAt(a.dayOffset).slice(0, 10),
           is_deadline: !!a.isDeadline,
@@ -136,6 +186,8 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
         const anchorT = new Date(lastNode.node_date).getTime();
         const { error: noteErr } = await supabaseAdmin.from("notes").insert({
           project_id: project.id,
+          organization_id: orgId,
+          created_by_user_id: userId,
           node_id: lastNode.id,
           body: tp.note.body,
           x: anchorT + tp.note.anchorDayOffset * DAY_MS,
@@ -160,7 +212,7 @@ export async function seedTutorialIfNeeded(userId: string): Promise<void> {
 // Make sure every tag category/value in TUTORIAL_TAG_CATEGORIES exists for the
 // user, reusing existing rows where names match. Returns a map of
 // value-text -> tag_value_id so the caller can apply assignments by name.
-async function ensureTagCatalog(userId: string): Promise<Map<string, string>> {
+async function ensureTagCatalog(userId: string, orgId: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
 
   // Pull existing categories so we can reuse by name match.
@@ -183,6 +235,8 @@ async function ensureTagCatalog(userId: string): Promise<Map<string, string>> {
         .from("tag_categories")
         .insert({
           user_id: userId,
+          organization_id: orgId,
+          created_by_user_id: userId,
           name: cat.name,
           sort_order: maxSort,
           is_default: false,
@@ -212,7 +266,7 @@ async function ensureTagCatalog(userId: string): Promise<Map<string, string>> {
       if (!valueId) {
         const { data, error } = await supabaseAdmin
           .from("tag_values")
-          .insert({ category_id: categoryId, value: v.value, color: v.color })
+          .insert({ category_id: categoryId, value: v.value, color: v.color, organization_id: orgId, created_by_user_id: userId })
           .select("id")
           .single();
         if (error || !data) {
