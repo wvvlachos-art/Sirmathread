@@ -29,11 +29,17 @@ Roles: **owner** (full control), **member** (can edit), **viewer** (read-only).
       DONE 2026-05-29: applied cleanly, no errors; verify passed (14 new
       columns, display_name backfilled, 4 new tables with RLS, existing
       per-user policies untouched = policy_count 1 each).
-- [ ] **Phase 2 — Data migration.** *Confirm/take a Supabase backup first (record
-      timestamp).* Run in a transaction on a backup snapshot first. Backfill orgs,
-      then tighten new columns to NOT NULL and swap existing tables' RLS to
-      org-based. Report: backup confirmed, migration clean, every project has
-      org_id, no orphans, original users still see their own data.
+- [x] **Phase 2 — Data migration.** DONE 2026-05-29: Step A backfill verified
+      (3 workspaces/owners, no orphans, A3=0); Step B applied NOT NULL + swapped
+      RLS to per-workspace (incl. emails + tag-link tables); app reloaded and all
+      data still visible. *Known gap until Phase 3:* app can't CREATE new items
+      yet (not workspace-aware) — reads work.
+      - BACKUP TAKEN: `2026-05-29T15:33:47.782Z` → `backups/backup-2026-05-29T15-33-47-782Z.json`
+        (3 profiles, 26 projects, 115 nodes, 27 ambitions, 8 notes, 10 tag cats,
+        24 tag values; via `supabase/backup-data.mjs`, read-only). Free tier — no
+        dashboard backups, so this JSON snapshot is the restore path.
+      - Split into **Step A** (backfill, reversible) → verify → **Step B**
+        (NOT NULL + swap RLS). Do not run Step B until Step A verifies clean.
 - [ ] **Phase 3 — Backend logic.** Invite flow, member management, activity-log
       insertion on relevant events, personal-org auto-create on signup. Report:
       server-side logic works in isolation.

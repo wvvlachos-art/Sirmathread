@@ -330,6 +330,9 @@ export default async function Layer1Page({
         </div>
         <div className="flex items-center gap-4">
           <NewProjectButton />
+          <Link href="/members" className="text-sm text-muted hover:text-ink">
+            Members
+          </Link>
           <span className="text-sm text-muted">{user.email}</span>
           <SignOutButton />
         </div>
