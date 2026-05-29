@@ -33,10 +33,12 @@ export default function AcceptClient({
 
   const signIn = async () => {
     const supabase = createClient();
+    // Route through /auth/callback (which exchanges the OAuth code for a
+    // session), then have it send us back to this invite page.
+    const next = `/accept-invite?token=${token}`;
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      // Come straight back to this invite page after Google sign-in.
-      options: { redirectTo: window.location.href },
+      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
     });
   };
 
