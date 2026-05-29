@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { SPINE_PALETTE } from "@/lib/theme";
 import { logActivity } from "@/lib/activity";
+import { resolveActiveOrg } from "@/lib/activeOrg";
 
 // NOTE on revalidatePath: Layer 1 used to call revalidatePath("/layer1") after
 // every mutation, which re-ran the giant Supabase query and re-rendered the
@@ -20,15 +21,10 @@ async function activeOrgId(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string
 ): Promise<string | null> {
-  const { data } = await supabase
-    .from("memberships")
-    .select("organization_id, role")
-    .eq("user_id", userId);
-  const rows = (data ?? []) as { organization_id: string; role: string }[];
-  if (rows.length === 0) return null;
-  // No workspace switcher yet (Phase 4) — prefer the one they own.
-  const chosen = rows.find((m) => m.role === "owner") ?? rows[0];
-  return chosen.organization_id ?? null;
+  // Honours the workspace switcher (cookie-backed) so new top-level items land
+  // in whichever workspace the user is currently viewing.
+  const org = await resolveActiveOrg(supabase, userId);
+  return org?.id ?? null;
 }
 
 async function orgOfProject(
