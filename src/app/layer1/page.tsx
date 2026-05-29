@@ -333,6 +333,9 @@ export default async function Layer1Page({
           <Link href="/members" className="text-sm text-muted hover:text-ink">
             Members
           </Link>
+          <Link href="/activity" className="text-sm text-muted hover:text-ink">
+            Activity
+          </Link>
           <span className="text-sm text-muted">{user.email}</span>
           <SignOutButton />
         </div>

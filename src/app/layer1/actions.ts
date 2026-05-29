@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { SPINE_PALETTE } from "@/lib/theme";
+import { logActivity } from "@/lib/activity";
 
 // NOTE on revalidatePath: Layer 1 used to call revalidatePath("/layer1") after
 // every mutation, which re-ran the giant Supabase query and re-rendered the
@@ -78,6 +79,14 @@ export async function createAmbition(
     .select("id")
     .single();
   if (error) return { error: error.message };
+  await logActivity(supabase, {
+    orgId,
+    actorId: user.id,
+    action: "ambition.created",
+    targetType: "ambition",
+    targetId: data.id,
+    description: `Added ambition "${clean}"`,
+  });
   return { id: data.id };
 }
 
@@ -207,6 +216,14 @@ export async function createProject(
     .select("id")
     .single();
   if (error) return { error: error.message };
+  await logActivity(supabase, {
+    orgId,
+    actorId: user.id,
+    action: "project.created",
+    targetType: "project",
+    targetId: data.id,
+    description: `Created project "${clean}"`,
+  });
   return { id: data.id, spineColor };
 }
 
@@ -284,6 +301,14 @@ export async function createManualNode(
     .select("id")
     .single();
   if (error) return { error: error.message };
+  await logActivity(supabase, {
+    orgId,
+    actorId: user.id,
+    action: "node.created",
+    targetType: "node",
+    targetId: data.id,
+    description: `Added node "${clean}"`,
+  });
   return { id: data.id };
 }
 
