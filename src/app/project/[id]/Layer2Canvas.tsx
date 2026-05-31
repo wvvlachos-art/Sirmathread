@@ -1,33 +1,50 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { NODE_FILL, OXBLOOD, MUTED, ATTENTION_ALERT, darken } from "@/lib/theme";
 import { createBubble, updateBubble, deleteBubble } from "./actions";
 
-// Layer 2 canvas: serpentine layout (time-aware spacing) + manual context
-// bubbles (margin-note annotations attached to nodes). Time flows ALONG THE
-// THREAD. Month band (Phase 3) deferred.
+// Layer 2 canvas: serpentine layout (time-aware spacing) inside a centered,
+// bounded column, with manual context bubbles and an approximate month band.
+// Nodes reuse Layer 1's visual rules (tag fill, extra-tag bars, deadline
+// perimeter ring, done check), scaled up.
 
-export type L2Node = { id: string; label: string; t: number; done: boolean; hasDeadline: boolean };
-export type L2Bubble = {
+export type L2Node = {
   id: string;
-  nodeId: string;
-  content: string;
-  side: "above" | "below";
-  source: "manual" | "ai";
+  label: string;
+  t: number;
+  done: boolean;
+  deadline: string | null;
+  stage: number; // 0 = none, 1..4 = perimeter quarters
+  tags: string[]; // tag_value ids, in display order
 };
+export type L2Bubble = { id: string; nodeId: string; content: string; side: "above" | "below"; source: "manual" | "ai" };
 
-const NODE = 44;
-const BAND_W = 54; // soft month band down the left
-const PAD = 96; // left/right padding (keeps the leftmost nodes clear of the band)
-const TOP = 76;
-const ROW_H = 158;
-const CORNER = 30;
+// --- node glyph (matches Layer 1, in a 48-unit space, scaled to NODE) ---
+const GLYPH = 48;
+const NODE = 56;
+const GSCALE = NODE / GLYPH;
+const NODE_RX = 7;
+const NODE_PERIMETER_PATH =
+  `M 7 0 H 41 A 7 7 0 0 1 48 7 V 41 A 7 7 0 0 1 41 48 H 7 A 7 7 0 0 1 0 41 V 7 A 7 7 0 0 1 7 0 Z`;
+const CHECK_PATH = "M 14 24 L 22 32 L 36 16";
+const BAR_H = 4;
+const BAR_GAP = 3;
+const BAR_W = NODE * 0.78;
+
+// --- layout ---
+const BAND_W = 60;
+const COL_W = 1120; // bounded, centered column (~5 nodes per row)
+const PAD = 96; // left clears the band; right is symmetric margin
+const TOP = 84;
+const ROW_H = 150;
+const CORNER = 60;
 const LINEAR_MAX = 8;
 const DAY = 86_400_000;
 
-const MIN_SPACING = 112;
-const LOG_FACTOR = 70;
-const MAX_SPACING = 460;
+const MIN_SPACING = 200;
+const LOG_FACTOR = 80;
+const MAX_SPACING = 600;
 const spacingFor = (gapDays: number) =>
   Math.max(MIN_SPACING, Math.min(MAX_SPACING, MIN_SPACING + LOG_FACTOR * Math.log(1 + Math.max(0, gapDays))));
 
@@ -38,14 +55,15 @@ function humanGap(days: number): string {
   return `~${Math.round((days / 365) * 10) / 10} years later`;
 }
 
-// Bubble geometry
-const CONN = 20; // dashed connector stub length
-const LABEL_SPACE = 26; // clearance below a node for its caption
-const STACK = 74; // vertical step when a node has multiple bubbles on one side
-const BUBBLE_W = 186;
+// --- bubbles ---
+const CONN = 22;
+const LABEL_SPACE = 36; // clearance below a node for caption + bars
+const STACK = 80;
+const BUBBLE_W = 190;
 const MANUAL_EDGE = "#5a7d8c";
 
-const LABEL_MAX = 20;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LABEL_MAX = 22;
 const trunc = (s: string) => (s.length > LABEL_MAX ? s.slice(0, LABEL_MAX - 1) + "…" : s);
 
 type Pt = { x: number; y: number };
@@ -79,29 +97,33 @@ type Editing =
 export default function Layer2Canvas({
   nodes,
   bubbles: initialBubbles,
+  tagColors,
   canEdit,
   projectId,
   projectName,
 }: {
   nodes: L2Node[];
   bubbles: L2Bubble[];
+  tagColors: Record<string, string>;
   canEdit: boolean;
   projectId: string;
   projectName: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [vh, setVh] = useState(0);
+  const [mounted, setMounted] = useState(false);
   const [bubbles, setBubbles] = useState<L2Bubble[]>(initialBubbles);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => setMounted(true), []);
   useEffect(() => setBubbles(initialBubbles), [initialBubbles]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const apply = () => setWidth(el.clientWidth);
+    const apply = () => setVh(el.clientHeight);
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
@@ -116,17 +138,23 @@ export default function Layer2Canvas({
     );
   }
 
-  // ---- layout ----
-  const W = width || 1100;
-  const usable = Math.max(MIN_SPACING * 2, W - 2 * PAD);
+  // Render the canvas only after mount: it depends on browser-only measurement,
+  // so server + first-client render must agree (an empty wrapper) to avoid a
+  // hydration mismatch that would otherwise tear down the interactive tree.
+  if (!mounted) return <div ref={ref} className="flex-1 overflow-auto" />;
+
+  // ---- layout within the bounded column ----
+  const usable = COL_W - 2 * PAD;
   const spans = nodes.map((n, i) => (i === 0 ? 0 : spacingFor((n.t - nodes[i - 1].t) / DAY)));
   const totalLinear = spans.reduce((a, b) => a + b, 0);
-  const linear = nodes.length <= LINEAR_MAX && totalLinear + NODE <= usable;
+  // Small chains that fit in roughly one row render centered (horizontally, and
+  // vertically when the page is short) rather than wrapping.
+  const linear = nodes.length <= LINEAR_MAX && totalLinear + NODE <= COL_W - 40;
 
   const positions: Pt[] = [];
   let rows = 1;
   if (linear) {
-    const startX = Math.max(PAD, (W - totalLinear) / 2);
+    const startX = (COL_W - totalLinear) / 2;
     let x = startX;
     nodes.forEach((_, i) => {
       x += spans[i];
@@ -137,7 +165,7 @@ export default function Layer2Canvas({
     positions.push({ x, y: TOP });
     for (let i = 1; i < nodes.length; i++) {
       const nx = x + dir * spans[i];
-      const overR = dir === 1 && nx + NODE / 2 > W - PAD;
+      const overR = dir === 1 && nx + NODE / 2 > COL_W - PAD;
       const overL = dir === -1 && nx - NODE / 2 < PAD;
       if (overR || overL) {
         row++;
@@ -151,37 +179,38 @@ export default function Layer2Canvas({
     rows = row + 1;
   }
 
-  // Extra height so bubbles below the last row aren't clipped.
-  const height = TOP + (rows - 1) * ROW_H + NODE / 2 + STACK + 80;
-  const svgW = linear ? Math.max(W, totalLinear + 2 * PAD) : W;
-
+  const height = TOP + (rows - 1) * ROW_H + NODE / 2 + STACK + 90;
   const posById = new Map<string, Pt & { label: string }>();
   nodes.forEach((n, i) => posById.set(n.id, { ...positions[i], label: n.label }));
 
-  // Approximate month band (orientation aid only — NOT to scale, since spacing
-  // is compressed). Each month is labelled near the first node that falls in it.
+  // ---- approximate month band (orientation aid, not to scale) ----
   const monthBands: { label: string; y: number }[] = [];
   {
-    let lastKey = "";
-    let lastYear = "";
-    let lastY = -Infinity;
+    const order: string[] = [];
+    const data: Record<string, { mon: string; yr: string; ys: number[] }> = {};
     nodes.forEach((n, i) => {
       const d = new Date(n.t);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (key === lastKey) return;
-      const mon = d.toLocaleString("en-GB", { month: "short" });
-      const yr = String(d.getFullYear());
-      let y = positions[i].y;
-      if (y < lastY + 15) y = lastY + 15; // avoid label pile-up within a row
-      monthBands.push({ label: yr !== lastYear ? `${mon} '${yr.slice(2)}` : mon, y });
-      lastKey = key;
-      lastYear = yr;
-      lastY = y;
+      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+      if (!data[key]) {
+        data[key] = { mon: MONTHS[d.getUTCMonth()], yr: String(d.getUTCFullYear()), ys: [] };
+        order.push(key);
+      }
+      data[key].ys.push(positions[i].y);
     });
-    if (monthBands.length === 1) monthBands[0].y = Math.round(height / 2);
+    let lastYear = "";
+    let lastY = -Infinity;
+    for (const key of order) {
+      const m = data[key];
+      let y = m.ys.reduce((a, b) => a + b, 0) / m.ys.length; // vertical centre of the month's nodes
+      if (y < lastY + 18) y = lastY + 18;
+      lastY = y;
+      monthBands.push({ label: m.yr !== lastYear ? `${m.mon} '${m.yr.slice(2)}` : m.mon, y });
+      lastYear = m.yr;
+    }
+    if (monthBands.length === 1) monthBands[0].y = height / 2;
   }
 
-  // Bubble instances with stacking index per (node, side).
+  // ---- bubble instances ----
   const sideCount: Record<string, number> = {};
   const instances = bubbles
     .map((b) => {
@@ -198,7 +227,7 @@ export default function Layer2Canvas({
     x: np.x,
     y: side === "above" ? np.y - NODE / 2 - CONN - k * STACK : np.y + NODE / 2 + LABEL_SPACE + CONN + k * STACK,
   });
-  const clampX = (x: number) => Math.max(BUBBLE_W / 2 + 4, Math.min(svgW - BUBBLE_W / 2 - 4, x));
+  const clampX = (x: number) => Math.max(BUBBLE_W / 2 + 4, Math.min(COL_W - BUBBLE_W / 2 - 4, x));
 
   // ---- bubble CRUD ----
   const startNew = (nodeId: string) => {
@@ -224,18 +253,12 @@ export default function Layer2Canvas({
       const label = posById.get(editing.nodeId)?.label ?? "a node";
       const res = await createBubble(projectId, editing.nodeId, text, editing.side, label, projectName);
       setBusy(false);
-      if (res.error || !res.id) {
-        alert(res.error ?? "Could not save.");
-        return;
-      }
+      if (res.error || !res.id) return void alert(res.error ?? "Could not save.");
       setBubbles((prev) => [...prev, { id: res.id!, nodeId: editing.nodeId, content: text, side: editing.side, source: "manual" }]);
     } else {
       const res = await updateBubble(editing.bubbleId, text);
       setBusy(false);
-      if (res.error) {
-        alert(res.error);
-        return;
-      }
+      if (res.error) return void alert(res.error);
       setBubbles((prev) => prev.map((b) => (b.id === editing.bubbleId ? { ...b, content: text } : b)));
     }
     cancel();
@@ -246,202 +269,205 @@ export default function Layer2Canvas({
     setBusy(true);
     const res = await deleteBubble(id);
     setBusy(false);
-    if (res.error) {
-      alert(res.error);
-      return;
-    }
+    if (res.error) return void alert(res.error);
     setBubbles((prev) => prev.filter((b) => b.id !== id));
     cancel();
   };
-
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       save();
-    } else if (e.key === "Escape") {
-      cancel();
-    }
+    } else if (e.key === "Escape") cancel();
   };
 
   const editorAnchor = (() => {
     if (!editing) return null;
     const np = posById.get(editing.nodeId);
     if (!np) return null;
-    const k = editing.kind === "new" ? bubbles.filter((b) => b.nodeId === editing.nodeId && b.side === editing.side).length : instances.find((x) => x.b.id === (editing as { bubbleId: string }).bubbleId)?.k ?? 0;
+    const k =
+      editing.kind === "new"
+        ? bubbles.filter((b) => b.nodeId === editing.nodeId && b.side === editing.side).length
+        : instances.find((x) => x.b.id === editing.bubbleId)?.k ?? 0;
     return { ...anchorFor(np, editing.side, k), side: editing.side };
   })();
 
   const labelCls = "text-[8px] uppercase tracking-[0.5px]";
+  const fmt = (iso: string) => {
+    const d = new Date(iso + "T00:00:00Z");
+    return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
+  };
 
   return (
     <div ref={ref} className="flex-1 overflow-auto">
-      <div className="relative" style={{ width: svgW, height }}>
-        <svg width={svgW} height={height} className="absolute inset-0" role="img" aria-label="Project node chain">
-          {/* soft month band (approximate orientation aid) */}
-          <rect x={0} y={0} width={BAND_W} height={height} fill="#e1d5ba" fillOpacity={0.5} />
-          {monthBands.map((m, i) => (
-            <text
-              key={`mb-${i}`}
-              x={10}
-              y={Math.min(height - 8, Math.max(16, m.y))}
-              fontSize={11}
-              fontFamily="Georgia, serif"
-              fill="#8a7d5c"
-            >
-              {m.label}
-            </text>
-          ))}
-
-          <path d={roundedPath(positions, CORNER)} fill="none" stroke="#7a2718" strokeOpacity={0.5} strokeWidth={1.75} />
-
-          {/* gap annotations */}
-          {nodes.map((n, i) => {
-            if (i === 0) return null;
-            const days = (n.t - nodes[i - 1].t) / DAY;
-            if (days <= GAP_NOTE_DAYS) return null;
-            const a = positions[i - 1], b = positions[i];
-            const sameRow = Math.abs(a.y - b.y) < 1;
-            const mx = sameRow ? (a.x + b.x) / 2 : a.x + NODE / 2 + 10;
-            const my = sameRow ? a.y - NODE / 2 - 10 : (a.y + b.y) / 2;
-            return (
-              <text key={`gap-${n.id}`} x={mx} y={my} textAnchor={sameRow ? "middle" : "start"} fontSize={10} fontStyle="italic" fontFamily='Georgia, serif' fill="#a8915f">
-                {humanGap(days)}
+      <div className="flex min-h-full justify-center" style={{ alignItems: height < vh ? "center" : "flex-start" }}>
+        <div className="relative" style={{ width: COL_W, height }}>
+          <svg width={COL_W} height={height} className="absolute inset-0" role="img" aria-label="Project node chain">
+            {/* month band */}
+            <rect x={0} y={0} width={BAND_W} height={height} fill="#e1d5ba" fillOpacity={0.5} />
+            {monthBands.map((m, i) => (
+              <text key={`mb-${i}`} x={12} y={Math.min(height - 10, Math.max(18, m.y))} fontSize={12.5} fontFamily="Georgia, serif" fill="#8a7d5c">
+                {m.label}
               </text>
-            );
-          })}
+            ))}
 
-          {/* bubble connectors */}
-          {instances.map(({ b, np, k }) => {
-            const a = anchorFor(np, b.side, k);
-            const fromY = b.side === "above" ? np.y - NODE / 2 : np.y + NODE / 2;
-            return (
-              <line key={`c-${b.id}`} x1={np.x} y1={fromY} x2={clampX(a.x)} y2={a.y} stroke="#bca37e" strokeWidth={1} strokeDasharray="3 3" />
-            );
-          })}
+            {/* wire */}
+            <path d={roundedPath(positions, CORNER)} fill="none" stroke={OXBLOOD} strokeOpacity={0.5} strokeWidth={2.5} />
 
-          {/* nodes */}
-          {nodes.map((n, i) => {
-            const { x: cx, y: cy } = positions[i];
-            return (
-              <g key={n.id}>
-                {n.hasDeadline && (
-                  <rect x={cx - NODE / 2 - 3} y={cy - NODE / 2 - 3} width={NODE + 6} height={NODE + 6} rx={10} fill="none" stroke="#7a2718" strokeWidth={1.25} strokeOpacity={0.7} />
-                )}
-                <rect x={cx - NODE / 2} y={cy - NODE / 2} width={NODE} height={NODE} rx={8} fill="#f7eed9" stroke="#7a2718" strokeWidth={1.75} />
-                {n.done && (
-                  <path d={`M ${cx - 9} ${cy} l 7 7 l 12 -13`} fill="none" stroke="#7a2718" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round" />
-                )}
-                <text x={cx} y={cy + NODE / 2 + 17} textAnchor="middle" fontSize={11.5} fill="#4d4327">
-                  {trunc(n.label)}
+            {/* gap annotations */}
+            {nodes.map((n, i) => {
+              if (i === 0) return null;
+              const days = (n.t - nodes[i - 1].t) / DAY;
+              if (days <= GAP_NOTE_DAYS) return null;
+              const a = positions[i - 1], b = positions[i];
+              const sameRow = Math.abs(a.y - b.y) < 1;
+              const mx = sameRow ? (a.x + b.x) / 2 : a.x + NODE / 2 + 12;
+              const my = sameRow ? a.y - NODE / 2 - 12 : (a.y + b.y) / 2;
+              return (
+                <text key={`gap-${n.id}`} x={mx} y={my} textAnchor={sameRow ? "middle" : "start"} fontSize={10} fontStyle="italic" fontFamily="Georgia, serif" fill="#a8915f">
+                  {humanGap(days)}
                 </text>
-              </g>
-            );
-          })}
-        </svg>
+              );
+            })}
 
-        {/* ---- HTML overlay: hover "+", bubbles, editor ---- */}
-        {canEdit &&
-          nodes.map((n, i) => {
-            const { x: cx, y: cy } = positions[i];
+            {/* bubble connectors */}
+            {instances.map(({ b, np, k }) => {
+              const a = anchorFor(np, b.side, k);
+              const fromY = b.side === "above" ? np.y - NODE / 2 : np.y + NODE / 2;
+              return <line key={`c-${b.id}`} x1={np.x} y1={fromY} x2={clampX(a.x)} y2={a.y} stroke="#bca37e" strokeWidth={1} strokeDasharray="3 3" />;
+            })}
+
+            {/* nodes — Layer 1 visual rules, scaled */}
+            {nodes.map((n, i) => {
+              const { x: cx, y: cy } = positions[i];
+              const primaryColor = n.tags[0] ? tagColors[n.tags[0]] : null;
+              const fill = primaryColor ?? NODE_FILL;
+              const stroke = primaryColor ? darken(primaryColor) : OXBLOOD;
+              const showPerimeter = !n.done && n.stage > 0;
+              const showCheck = n.done && !!n.deadline;
+              const extras = n.tags.slice(1);
+              return (
+                <g key={n.id}>
+                  <g transform={`translate(${cx - NODE / 2}, ${cy - NODE / 2}) scale(${GSCALE})`}>
+                    <rect width={GLYPH} height={GLYPH} rx={NODE_RX} ry={NODE_RX} fill={fill} stroke={stroke} strokeWidth={1.5} />
+                    {showPerimeter && (
+                      <path d={NODE_PERIMETER_PATH} pathLength={4} fill="none" stroke={ATTENTION_ALERT} strokeWidth={3} strokeDasharray={`${n.stage} 4`} strokeLinecap="butt" />
+                    )}
+                    {showCheck && (
+                      <path d={CHECK_PATH} fill="none" stroke={primaryColor ? "#ffffff" : OXBLOOD} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+                    )}
+                    <title>
+                      {n.label}
+                      {n.deadline ? ` — deadline ${fmt(n.deadline)}` : ""}
+                      {n.done ? " (done)" : ""}
+                    </title>
+                  </g>
+                  {extras.map((tid, bi) => (
+                    <rect key={tid} x={cx - BAR_W / 2} y={cy + NODE / 2 + BAR_GAP + bi * (BAR_H + BAR_GAP)} width={BAR_W} height={BAR_H} rx={2} ry={2} fill={tagColors[tid] ?? MUTED} />
+                  ))}
+                  <text
+                    x={cx}
+                    y={cy + NODE / 2 + (extras.length ? extras.length * (BAR_H + BAR_GAP) + BAR_GAP : 0) + 18}
+                    textAnchor="middle"
+                    fontSize={13.5}
+                    fontFamily="Georgia, serif"
+                    fill="#6b6244"
+                  >
+                    {trunc(n.label)}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* hover "+" */}
+          {canEdit &&
+            nodes.map((n, i) => {
+              const { x: cx, y: cy } = positions[i];
+              return (
+                <div
+                  key={`hit-${n.id}`}
+                  className="absolute"
+                  style={{ left: cx - NODE / 2, top: cy - NODE / 2, width: NODE, height: NODE }}
+                  onMouseEnter={() => setHovered(n.id)}
+                  onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
+                >
+                  {hovered === n.id && (
+                    <button
+                      onClick={() => startNew(n.id)}
+                      title="Add a context note"
+                      className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-oxblood text-xs leading-none text-paper hover:bg-oxblood-dark"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+
+          {/* bubbles */}
+          {instances.map(({ b, np, k }) => {
+            if (editing?.kind === "edit" && editing.bubbleId === b.id) return null;
+            const a = anchorFor(np, b.side, k);
+            const rot = (k + (b.side === "above" ? 0 : 1)) % 2 === 0 ? -1.3 : 1.3;
             return (
               <div
-                key={`hit-${n.id}`}
-                className="absolute"
-                style={{ left: cx - NODE / 2, top: cy - NODE / 2, width: NODE, height: NODE }}
-                onMouseEnter={() => setHovered(n.id)}
-                onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
+                key={b.id}
+                className={canEdit ? "absolute cursor-text" : "absolute"}
+                onClick={() => startEdit(b)}
+                style={{ left: clampX(a.x), top: a.y, width: BUBBLE_W, transform: `translate(-50%, ${b.side === "above" ? "-100%" : "0"}) rotate(${rot}deg)` }}
               >
-                {hovered === n.id && (
-                  <button
-                    onClick={() => startNew(n.id)}
-                    title="Add a context note"
-                    className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-oxblood text-xs leading-none text-paper hover:bg-oxblood-dark"
-                  >
-                    +
-                  </button>
-                )}
+                <div className="flex gap-2">
+                  <div className="shrink-0 rounded" style={{ width: 4, background: MANUAL_EDGE }} />
+                  <div>
+                    <div className={labelCls} style={{ color: MANUAL_EDGE }}>CONTEXT · YOU</div>
+                    <div style={{ fontFamily: "Georgia, serif", fontStyle: "italic", fontSize: 12.5, color: "#5c5238", lineHeight: 1.35 }}>{b.content}</div>
+                  </div>
+                </div>
               </div>
             );
           })}
 
-        {/* existing bubbles (hidden while being edited) */}
-        {instances.map(({ b, np, k }) => {
-          if (editing?.kind === "edit" && editing.bubbleId === b.id) return null;
-          const a = anchorFor(np, b.side, k);
-          const rot = (k + (b.side === "above" ? 0 : 1)) % 2 === 0 ? -1.3 : 1.3;
-          return (
-            <div
-              key={b.id}
-              className={canEdit ? "absolute cursor-text" : "absolute"}
-              onClick={() => startEdit(b)}
-              style={{
-                left: clampX(a.x),
-                top: a.y,
-                width: BUBBLE_W,
-                transform: `translate(-50%, ${b.side === "above" ? "-100%" : "0"}) rotate(${rot}deg)`,
-              }}
-            >
-              <div className="flex gap-2">
+          {/* inline editor */}
+          {editing && editorAnchor && (
+            <div className="absolute" style={{ left: clampX(editorAnchor.x), top: editorAnchor.y, width: 214, transform: `translate(-50%, ${editorAnchor.side === "above" ? "-100%" : "0"})` }}>
+              <div className="flex gap-2 rounded-md border border-hairline bg-paper-surface p-2 shadow-lg">
                 <div className="shrink-0 rounded" style={{ width: 4, background: MANUAL_EDGE }} />
-                <div>
+                <div className="flex-1">
                   <div className={labelCls} style={{ color: MANUAL_EDGE }}>CONTEXT · YOU</div>
-                  <div style={{ fontFamily: "Georgia, serif", fontStyle: "italic", fontSize: 12, color: "#5c5238", lineHeight: 1.35 }}>
-                    {b.content}
+                  <textarea
+                    autoFocus
+                    rows={2}
+                    value={editing.text}
+                    onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                    onKeyDown={onKey}
+                    placeholder="Add context…"
+                    className="mt-0.5 w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-ink outline-none"
+                    style={{ fontFamily: "Georgia, serif", fontStyle: "italic", fontSize: 12.5 }}
+                  />
+                  <div className="mt-1 flex items-center gap-2">
+                    <button onClick={save} disabled={busy || !editing.text.trim()} className="rounded bg-oxblood px-2 py-0.5 text-xs text-paper hover:bg-oxblood-dark disabled:opacity-60">
+                      Save
+                    </button>
+                    <button onClick={cancel} className="text-xs text-muted hover:text-ink">Cancel</button>
+                    {editing.kind === "edit" && (
+                      <span className="ml-auto">
+                        {confirmDelete ? (
+                          <span className="flex items-center gap-1.5 text-xs">
+                            <span className="text-muted">Delete?</span>
+                            <button onClick={remove} disabled={busy} className="text-oxblood hover:underline">Yes</button>
+                            <button onClick={() => setConfirmDelete(false)} className="text-muted hover:text-ink">No</button>
+                          </span>
+                        ) : (
+                          <button onClick={() => setConfirmDelete(true)} className="text-xs text-oxblood hover:underline">Delete</button>
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
-          );
-        })}
-
-        {/* inline editor */}
-        {editing && editorAnchor && (
-          <div
-            className="absolute"
-            style={{
-              left: clampX(editorAnchor.x),
-              top: editorAnchor.y,
-              width: 210,
-              transform: `translate(-50%, ${editorAnchor.side === "above" ? "-100%" : "0"})`,
-            }}
-          >
-            <div className="flex gap-2 rounded-md border border-hairline bg-paper-surface p-2 shadow-lg">
-              <div className="shrink-0 rounded" style={{ width: 4, background: MANUAL_EDGE }} />
-              <div className="flex-1">
-                <div className={labelCls} style={{ color: MANUAL_EDGE }}>CONTEXT · YOU</div>
-                <textarea
-                  autoFocus
-                  rows={2}
-                  value={editing.text}
-                  onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                  onKeyDown={onKey}
-                  placeholder="Add context…"
-                  className="mt-0.5 w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-ink outline-none"
-                  style={{ fontFamily: "Georgia, serif", fontStyle: "italic", fontSize: 12 }}
-                />
-                <div className="mt-1 flex items-center gap-2">
-                  <button onClick={save} disabled={busy || !editing.text.trim()} className="rounded bg-oxblood px-2 py-0.5 text-xs text-paper hover:bg-oxblood-dark disabled:opacity-60">
-                    Save
-                  </button>
-                  <button onClick={cancel} className="text-xs text-muted hover:text-ink">Cancel</button>
-                  {editing.kind === "edit" && (
-                    <span className="ml-auto">
-                      {confirmDelete ? (
-                        <span className="flex items-center gap-1.5 text-xs">
-                          <span className="text-muted">Delete?</span>
-                          <button onClick={remove} disabled={busy} className="text-oxblood hover:underline">Yes</button>
-                          <button onClick={() => setConfirmDelete(false)} className="text-muted hover:text-ink">No</button>
-                        </span>
-                      ) : (
-                        <button onClick={() => setConfirmDelete(true)} className="text-xs text-oxblood hover:underline">Delete</button>
-                      )}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
