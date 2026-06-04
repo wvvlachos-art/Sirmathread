@@ -4,6 +4,32 @@ import { createClient } from "@/lib/supabase/server";
 import { SPINE_PALETTE } from "@/lib/theme";
 import { logActivity } from "@/lib/activity";
 import { resolveActiveOrg } from "@/lib/activeOrg";
+import { nextPantoneCode } from "@/lib/pantone";
+
+// True when a write/read failed because the column hasn't been added yet
+// (migration pending). PostgREST reports a schema-cache miss as PGRST204 on
+// writes; the underlying Postgres code is 42703. Treat both as "ignore".
+function colMissing(error: { code?: string; message?: string } | null): boolean {
+  return !!error && (error.code === "PGRST204" || error.code === "42703" || /could not find|does not exist/i.test(error.message ?? ""));
+}
+
+// Assign the next stable Pantone code to a freshly-created note ("N-NN" per
+// parent node, in creation order). Tolerant: returns undefined (and persists
+// nothing) if the node is lane-level or the pantone_code column isn't there
+// yet — the migration's backfill fills those in later.
+async function assignNoteCode(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  noteId: string,
+  nodeId: string | null
+): Promise<string | undefined> {
+  if (!nodeId) return undefined;
+  const { data: rows, error } = await supabase.from("notes").select("pantone_code").eq("node_id", nodeId);
+  if (error) return undefined; // column missing → skip until migration runs
+  const code = nextPantoneCode("N", ((rows ?? []) as { pantone_code: string | null }[]).map((r) => r.pantone_code));
+  const { error: upErr } = await supabase.from("notes").update({ pantone_code: code }).eq("id", noteId);
+  if (upErr && !colMissing(upErr)) return undefined;
+  return code;
+}
 
 // NOTE on revalidatePath: Layer 1 used to call revalidatePath("/layer1") after
 // every mutation, which re-ran the giant Supabase query and re-rendered the
@@ -554,7 +580,7 @@ export async function createNote(
   body: string,
   x: number,
   y: number
-): Promise<{ id?: string; error?: string }> {
+): Promise<{ id?: string; code?: string; error?: string }> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -576,7 +602,8 @@ export async function createNote(
     .select("id")
     .single();
   if (error) return { error: error.message };
-  return { id: data.id };
+  const code = await assignNoteCode(supabase, data.id, nodeId);
+  return { id: data.id, code };
 }
 
 // Drag reposition — kept optimistic on the client for smoothness.
@@ -627,8 +654,8 @@ export async function updateNoteLayout(
 // panel opens rather than bloating the main /layer1 query. RLS scopes all reads.
 export async function getNodeDetail(nodeId: string): Promise<{
   email: { from: string; snippet: string; dateSent: string | null; threadUrl: string | null } | null;
-  notes: { id: string; body: string }[];
-  contexts: { id: string; content: string; kind: "context" | "information"; title: string | null }[];
+  notes: { id: string; body: string; code: string | null }[];
+  contexts: { id: string; content: string; kind: "context" | "information"; title: string | null; code: string | null }[];
   error?: string;
 }> {
   const supabase = await createClient();
@@ -664,7 +691,7 @@ export async function getNodeDetail(nodeId: string): Promise<{
     .eq("node_id", nodeId)
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
-  const notes = ((noteRows ?? []) as { id: string; body: string | null }[]).map((n) => ({ id: n.id, body: n.body ?? "" }));
+  const notes = ((noteRows ?? []) as { id: string; body: string | null }[]).map((n) => ({ id: n.id, body: n.body ?? "", code: null as string | null }));
 
   const { data: ctxRows } = await supabase
     .from("bubbles")
@@ -676,7 +703,22 @@ export async function getNodeDetail(nodeId: string): Promise<{
     content: b.content ?? "",
     kind: b.bubble_type === "information" ? ("information" as const) : ("context" as const),
     title: b.title,
+    code: null as string | null,
   }));
+
+  // Pantone codes live in a column added by supabase/pantone-codes.sql. Overlay
+  // them tolerantly (separate query) so the panel still loads pre-migration —
+  // the codes just stay absent until it runs.
+  {
+    const { data: nc } = await supabase.from("notes").select("id, pantone_code").eq("node_id", nodeId).is("deleted_at", null);
+    const byId = new Map(((nc ?? []) as { id: string; pantone_code: string | null }[]).map((r) => [r.id, r.pantone_code]));
+    for (const n of notes) n.code = byId.get(n.id) ?? null;
+  }
+  {
+    const { data: cc } = await supabase.from("bubbles").select("id, pantone_code").eq("node_id", nodeId);
+    const byId = new Map(((cc ?? []) as { id: string; pantone_code: string | null }[]).map((r) => [r.id, r.pantone_code]));
+    for (const c of contexts) c.code = byId.get(c.id) ?? null;
+  }
 
   return { email, notes, contexts };
 }

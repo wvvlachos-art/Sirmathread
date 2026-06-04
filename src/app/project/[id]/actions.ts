@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity";
+import { nextPantoneCode, bubblePrefix } from "@/lib/pantone";
 
 // Context bubbles. RLS already enforces owner/member to write and blocks
 // viewers; these actions add the activity-log entries and resolve the
@@ -15,7 +16,7 @@ export async function createBubble(
   nodeLabel: string,
   projectName: string,
   bubbleType: "context" | "information" = "context"
-): Promise<{ id?: string; error?: string }> {
+): Promise<{ id?: string; code?: string; error?: string }> {
   const clean = content.trim();
   if (!clean) return { error: "Note can't be empty." };
   const supabase = await createClient();
@@ -52,6 +53,18 @@ export async function createBubble(
     .single();
   if (error) return { error: error.message };
 
+  // Assign a stable Pantone code ("C-NN" context / "I-NN" information, per
+  // parent node). Tolerant: skipped if the pantone_code column isn't there yet.
+  let code: string | undefined;
+  {
+    const { data: rows, error: rErr } = await supabase.from("bubbles").select("pantone_code").eq("node_id", nodeId);
+    if (!rErr) {
+      code = nextPantoneCode(bubblePrefix(bubbleType), ((rows ?? []) as { pantone_code: string | null }[]).map((r) => r.pantone_code));
+      const { error: upErr } = await supabase.from("bubbles").update({ pantone_code: code }).eq("id", data.id);
+      if (upErr && !isMissingColumn(upErr)) code = undefined;
+    }
+  }
+
   await logActivity(supabase, {
     orgId,
     actorId: user.id,
@@ -60,7 +73,7 @@ export async function createBubble(
     targetId: data.id,
     description: `Added a note to "${nodeLabel}" on "${projectName}"`,
   });
-  return { id: data.id };
+  return { id: data.id, code };
 }
 
 export async function updateBubble(id: string, content: string): Promise<{ error?: string }> {
@@ -79,9 +92,11 @@ export async function updateBubble(id: string, content: string): Promise<{ error
     .maybeSingle();
   const orgId = (row as { organization_id: string } | null)?.organization_id;
 
+  // A user edit flips the row to source='manual': it's no longer AI-generated,
+  // so the generation-time truncation/layout mechanisms must never touch it.
   const { error } = await supabase
     .from("bubbles")
-    .update({ content: clean, updated_at: new Date().toISOString() })
+    .update({ content: clean, source: "manual", updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) return { error: error.message };
 
@@ -234,7 +249,7 @@ export async function updateBubbleMeta(
   id: string,
   fields: { title?: string | null; shape?: string | null; bubbleType?: "context" | "information" }
 ): Promise<{ error?: string }> {
-  const patch: { title?: string | null; shape?: string | null; bubble_type?: string; updated_at?: string } = {};
+  const patch: { title?: string | null; shape?: string | null; bubble_type?: string; pantone_code?: string; updated_at?: string } = {};
   if (fields.title !== undefined) patch.title = fields.title ? fields.title.trim() || null : null;
   if (fields.shape !== undefined) patch.shape = fields.shape ?? null;
   if (fields.bubbleType !== undefined) patch.bubble_type = fields.bubbleType;
@@ -245,6 +260,23 @@ export async function updateBubbleMeta(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "You're not signed in." };
+
+  // If the type family changes (Context C ↔ Information I), reassign a stable
+  // code in the new family so the prefix keeps matching the type. Tolerant: the
+  // select errors out (and we skip) when the pantone_code column is absent.
+  if (fields.bubbleType !== undefined) {
+    const newPrefix = bubblePrefix(fields.bubbleType);
+    const { data: cur, error: curErr } = await supabase.from("bubbles").select("node_id, pantone_code").eq("id", id).maybeSingle();
+    if (!curErr && cur) {
+      const c = cur as { node_id: string | null; pantone_code: string | null };
+      const curPrefix = c.pantone_code?.trim()?.[0]?.toUpperCase() ?? null;
+      if (c.node_id && curPrefix !== newPrefix) {
+        const { data: rows } = await supabase.from("bubbles").select("pantone_code").eq("node_id", c.node_id);
+        patch.pantone_code = nextPantoneCode(newPrefix, ((rows ?? []) as { pantone_code: string | null }[]).map((r) => r.pantone_code));
+      }
+    }
+  }
+
   const { error } = await supabase.from("bubbles").update(patch).eq("id", id);
   if (error) return isMissingColumn(error) ? {} : { error: error.message }; // missing column = migration pending
   return {};
@@ -282,6 +314,25 @@ export async function updateBubblePosition(id: string, x: number, y: number): Pr
     .update({ x, y, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) return { error: error.message };
+  return {};
+}
+
+// "Re-run initial layout": clear every custom Layer-2 position for a project so
+// the adaptive auto-layout takes over. Resets dragged nodes (l2_x/l2_y), dragged
+// sub-nodes (legacy x/y offset), and dragged/resized notes (l2_x/l2_y/l2_w). This
+// intentionally discards the user's manual positioning. Missing-column errors are
+// swallowed (the layout columns are added by later migrations).
+export async function resetL2Layout(projectId: string): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "You're not signed in." };
+  const r1 = await supabase.from("nodes").update({ l2_x: null, l2_y: null }).eq("project_id", projectId);
+  const r2 = await supabase.from("bubbles").update({ x: null, y: null }).eq("project_id", projectId);
+  const r3 = await supabase.from("notes").update({ l2_x: null, l2_y: null, l2_w: null }).eq("project_id", projectId);
+  const err = r1.error ?? r2.error ?? r3.error;
+  if (err && !isMissingColumn(err)) return { error: err.message };
   return {};
 }
 

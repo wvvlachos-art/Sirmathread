@@ -498,3 +498,314 @@ Layer 1 / the node panel (cross-layer via shared `notes.body`); only L2
 position/size are L2-only. (Note: the Wave-2 turn that added spine-node *resize*
 was a misread of "nodes" for "notes"; spine-node resize was kept at the user's
 request, and this adds the notes behaviour they actually meant.)
+
+## Pantone-chip sub-nodes (visual polish pass — Phase 1 DONE)
+
+Unified the THREE places notes/contexts render into one shared visual. There was
+no shared "Wave-1" component — the styling was duplicated inline; it now is not.
+
+- **Shared component:** `src/app/SubnodeChip.tsx` (presentational, `"use client"`).
+  Renders a coloured band with the body text in **oxblood serif 13px / lh 1.4**
+  (NOT white — default colour is what reads on the light band), 4px radius, soft
+  shadow `0 2px 5px rgba(0,0,0,.1)`, padding `10px 14px 16px` (extra bottom for
+  the code). A small italic serif **Pantone code** ("`NOTE · N-04`" / "`CONTEXT ·
+  C-02`" / "`INFO · I-01`") is absolute-positioned bottom-right (8px/9px, letter-
+  spacing .18em, muted ink). The PARENT controls width + positioning; the chip
+  auto-sizes height to content, `minWidth 140`, `minHeight 36` (empty state).
+  `compact` mode (L1 swim-lane): tighter padding, no 140 floor, `clampLines`, and
+  the code is hidden (`showCode={false}`) — L1 stickies are always below the size
+  threshold so the code only ever surfaces on Layer 2 + the node panel.
+- **Three band families** (one colour per type — `CHIP` map in `theme.ts`):
+  Note = yellow `--note-fill #f2e4a8`; Context = coral `--context-fill #e8b89a`;
+  Information = lavender `--info-fill #d8c6e4`. Each has a muted `*-code` ink.
+  Decision (William): keep Information distinct (3rd family, prefix `I`), and L1
+  stickies get the chip *look* but stay compact with the code hidden.
+- **Applied at:** Layer 2 sub-node chips + L1-notes-on-L2 (`Layer2Canvas.tsx`,
+  `<SubnodeChip type={b.kind}…>` / `type="note"`); Wave-2 node panel Notes +
+  Context sections (`Timeline.tsx`, wraps a click button); L1 swim-lane stickies
+  (`Timeline.tsx`, compact). L2 connector/socket colour now = `darken(CHIP[kind]
+  .fill)` so the wire matches the chip family.
+- **Pantone codes — generation + persistence.** Migration
+  `supabase/pantone-codes.sql` adds `pantone_code text` to **`notes`** and
+  **`bubbles`** and backfills existing rows (N-NN per node; C-NN context-family /
+  I-NN information, per node, in `created_at` order). Numbering rule lives in
+  `src/lib/pantone.ts` (`nextPantoneCode(prefix, existing)` = max existing number
+  for that prefix + 1 → **stable across deletes, never reuses a freed number**;
+  `bubblePrefix(type)`). Generated server-side: `createNote` (layer1/actions) and
+  `createBubble` (project/[id]/actions) insert the row, then a SEPARATE tolerant
+  UPDATE sets the code (so creation still works pre-migration — code stays null
+  until the backfill runs); both now return `{ id, code }`. `updateBubbleMeta`
+  reassigns the code when the type family flips C↔I so the prefix keeps matching
+  the type. Codes surfaced to the client via tolerant overlay queries in
+  `project/[id]/page.tsx` (bubbles + notes) and `getNodeDetail` (panel); `L2Bubble`/
+  `L2NoteItem`/`NodeDetail` gained a `code` field. L1 lane notes are NOT plumbed a
+  code (compact, hidden) to avoid making the main `/layer1` query column-fragile.
+- **Resize: KEPT** (manual, user-controlled). The spec's OUT-OF-SCOPE line was
+  first read as "remove manual resize"; William then asked for it back, so the L2
+  sub-node corner handle (width+height, 104–380 × 32–440) and the L2-note width
+  handle (104–320) are restored, persisting via `updateBubbleSize` /
+  `updateNoteLayout`. Resize min-width (104) == `SubnodeChip` minWidth floor (104,
+  enough for the corner code on one line) == chip minHeight 30, ON PURPOSE: if the
+  chip's floors exceeded the wrapper width/height it would render bigger than its
+  wrapper and shove the corner handle off the corner. `SubnodeChip` is a flex
+  column whose body flexes + scrolls,
+  so a pinned height never spills past the band; with no height set it auto-grows.
+  `bubbleLayout` resolves w/h as live override → persisted width/height → default
+  (BUBBLE_W / auto). The bubble editor still persists `title`/`shape`, but the
+  chip ignores them now (fixed 4px radius, body-in-band): a harmless dead control
+  to retire in a later pass.
+
+## AI project generation — UI scaffolding (AI parser NOT wired yet)
+
+Interactive Generate UI in Layer 1 that captures input and hands it to a STUB.
+The real parser is a separate forthcoming brief — this is just the harness.
+
+- **🔌 Plug-in point:** `src/app/layer1/generateStub.ts` —
+  `triggerGenerationStub(input: GenerationInput)` with a big `TODO(ai-brief)`
+  banner. Logs the input + resolves; creates no projects, consumes no imports.
+  `GenerationInput = { sourceType: 'auto-detect'|'gmail-thread'|'meeting-notes'|
+  'brain-dump'; pasteContent; projectName: string|null; tagHints: string|null }`.
+  Shared cap `GENERATION_INPUT_LIMIT = 50_000`. The AI brief replaces the BODY,
+  keeps the signature; both callers pass a validated `GenerationInput`.
+- **Toolbar Generate button + dialog:** `src/app/layer1/GenerateButton.tsx`
+  (client). Rendered in `page.tsx` header **left of `<NewProjectButton/>`**, same
+  filled-oxblood style. Dialog reuses the app's modal pattern (`fixed inset-0 z-40
+  bg-black/40` + stopPropagation card): header (serif 16/500 + ti-x), SOURCE pills
+  (Auto-detect default = filled oxblood; others 0.5px-hairline outline), PASTE
+  CONTENT textarea (min-h 130, resize-y, 50k clamp + inline warning), optional
+  PROJECT NAME + TAG HINTS, footer (hardcoded `12 imports remaining`, always
+  shown + `Generate · 1 import`). Submit disabled until paste non-empty; on submit
+  → build input → `triggerGenerationStub` → close (discards) → toast. ×/backdrop/
+  Esc close and discard.
+- **Quick paste bar:** `src/app/layer1/QuickPasteBar.tsx` (client). Rendered in
+  `page.tsx` **between `</header>` and `<WandProvider>`** (above the Arrange/Filter
+  `Toolbar` row). 40px row, `bg-paper` (a touch darker than the toolbar's
+  `bg-paper-surface`), 0.5px hairline top+bottom, `px-6` to match the toolbar.
+  Clipboard icon · flex input · right side = italic "⌘V works anywhere" hint when
+  empty, swapped for a SMALLER inline `Generate · 1 import` (5×11px, 12px) when it
+  has content. Enter ≡ inline Generate. Fires the SAME stub with
+  `{ sourceType:'auto-detect', pasteContent:value, projectName:null, tagHints:null }`,
+  then clears. 50k truncate + warning.
+- **Global ⌘V capture:** single `window` `keydown` listener in QuickPasteBar's
+  `useEffect` (cleaned up on unmount). On (meta|ctrl)+V, if focus is NOT in an
+  INPUT/TEXTAREA/contenteditable (`focusIsEditable()`), `preventDefault` + read
+  `navigator.clipboard.readText()` → clamp into the bar → focus it; on
+  rejection (permission/unavailable) it just focuses the bar (graceful). When
+  focus IS in a field, it's left alone → native paste, no double-paste.
+- **Toast (new — app had none, used `alert`):** `src/app/layer1/Toast.tsx` —
+  `showToast(msg)` dispatches a `sirma:toast` CustomEvent; `<ToastHost/>` (mounted
+  once at the end of `page.tsx`) renders a bottom-centre transient. Both Generate
+  surfaces toast *"Generation queued (AI not yet wired up)"*.
+- **Icons:** `src/app/layer1/GenerateIcons.tsx` — hand-rolled ti-sparkles / ti-x /
+  ti-clipboard SVGs (no icon lib in the project).
+- **Token note:** the brief's "border-tertiary" maps to the existing `--hairline`
+  token, used inline at `0.5px` (Tailwind `border-*` is 1px).
+
+## AI project generation — pipeline (Phases 1–3, WIRED)
+
+Paste content → Haiku (structure) → Sonnet (context) → a real project in Layer 2.
+The stub from the UI brief is gone; `triggerGeneration` POSTs to the backend.
+
+### Architecture / files
+- **Route:** `src/app/api/generate-project/route.ts` (POST). Imports the LLM
+  factory — NOT the SDK. Flow: validate size (413 before any debit) → auth (401)
+  → resolve workspace + writer check (403) → `consume_import` (402 if exhausted)
+  → provider.generateStructure → provider.generateContexts → total-token check →
+  `generate_ai_project` RPC (atomic persist) → link 'consumed' event to project
+  (+ tokens, via service role) → `{ projectId }`. ANY failure after the debit
+  calls `refund_import` and returns `GenerationError.httpStatus` (504 timeout / 500).
+- **Provider abstraction** (swappable LLM): `src/lib/llm/`
+  - `types.ts` — `LLMProvider` interface (`generateStructure`, `generateContexts`),
+    `StructureInput/Output`, `ContextsInput/Output`, `StageResult<T>`,
+    `GenerationError{httpStatus}`, `TOKEN_BUDGET`, `OUTPUT_CAPS`.
+  - `providers/anthropic.ts` — the ONLY file importing `@anthropic-ai/sdk`. The
+    Haiku→Sonnet pipeline. To add OpenAI/Google: new file here + a `case` in the
+    factory + set `LLM_PROVIDER`. Nothing else changes.
+  - `index.ts` — `getLLMProvider()` factory (`LLM_PROVIDER`, default `anthropic`)
+    + `toGenerationPayload()` mapper (re-clamps caps; guarantees ≥ 1 node).
+- **Frontend:** `src/app/layer1/generate.ts` (`triggerGeneration`, `GENERATED_FLAG`),
+  `GenerateButton.tsx` (dialog, loading spinner, success→`router.push`, error keeps
+  input), `QuickPasteBar.tsx` (same), `project/[id]/GenerationToast.tsx` (reads the
+  sessionStorage flag, flashes the Layer-2 toast once + hosts `<ToastHost/>`).
+
+### Models + SDK patterns
+- Haiku `claude-haiku-4-5` (structure), Sonnet `claude-sonnet-4-6` (context) — user
+  spec, NOT the Opus default. `client.messages.create({...}, { signal })`.
+- **NO `output_config`/structured-outputs** — prompt-instructed JSON + `extractJson`
+  (strips ``` fences) + hand-rolled validator + ONE corrective retry (feeds the exact
+  error back as an assistant+user turn; the retry turn ends on `user`, so no
+  last-assistant-prefill 400). Second failure → throw → refund.
+- **Token caps** (input+output+cache, from `response.usage`): Haiku ≤ 30k, Sonnet ≤
+  70k (checked per stage), total ≤ 100k (checked in the route). `max_tokens` 8k/16k.
+- **Timeouts:** 30s/stage via `AbortController` (`{ signal }`); abort → `GenerationError(504)`.
+- **Prompt caching:** `cache_control:{type:"ephemeral"}` on the stable system block;
+  volatile bits (today, paste, hints) live in the USER turn. (Prompts may sit below
+  Haiku's 4096-token cache minimum — harmless; caches when long enough.)
+
+### JSON schemas
+- **Haiku (structure):** `{ project: { title, deadline: string|null, primary_participant: string|null, tags: string[] }, nodes: [ { id, title, date(YYYY-MM-DD), type: "node"|"ambition" } ] }`
+- **Sonnet (context):** same, each node + `contexts: [ { body } ]` (0–5).
+
+### System prompts — VERBATIM (keep in sync with `providers/anthropic.ts`)
+
+**HAIKU_SYSTEM:**
+> You are the STRUCTURE-EXTRACTION stage of Sirmathread's project parser. You read raw source content (an email thread, meeting notes, or freeform text) and extract a project and its timeline of events as strict JSON. You do NOT write narrative context — that is a later stage.
+>
+> PROCESSING RULES
+> - Identify events that have a known or reasonably inferable date from the source content.
+> - Create a node ONLY when the event is meaningful. EXCLUDE routine acknowledgments, administrative confirmations, out-of-office replies, pleasantries, and signature blocks.
+> - One node per distinct EVENT — not per email and not per message. Consolidate a multi-message discussion of the same event into a SINGLE node.
+> - Node titles are 2–6 words, an active verb phrase. Good: "Ting provides card number". Bad: "Card number information from Ting".
+> - If an event's date is genuinely unknown and cannot be reasonably inferred, SKIP the event rather than fabricate a date.
+> - Classify each node by its date relative to TODAY (the parse date is given in the user message): past or today → "node"; future → "ambition".
+> - Project metadata: a declarative, concise title; a deadline ONLY if one is explicitly stated in the source (otherwise null); identify the primary participant — the main "character" — when there is a clear one (otherwise null).
+> - Tag detection: extract people, organizations, and recurring topics as tags. Normalize variants to the fullest form (e.g. "Ting" and "Ting Lee" → "Ting Lee"). Any user-supplied tag hints take PRIORITY and must be included. Maximum 5 tags.
+> - Prefer FEWER nodes over more when uncertain. Skip noise. NEVER invent facts, dates, names, or events that are not supported by the source.
+> - When the content is genuinely unstructurable, output a minimal valid result: one project with a single node titled to signal that it could not be structured further (e.g. "Unstructured note captured").
+> - HARD CAP: at most 50 nodes per project. If you approach that, consolidate aggressively.
+>
+> OUTPUT — Return ONLY a single JSON object (no markdown/fences/commentary) matching the structure schema; generate a unique "id" per node; every "date" MUST be ISO YYYY-MM-DD.
+
+**SONNET_SYSTEM:**
+> You are the SUBNODE-GENERATION stage of Sirmathread's project parser. You receive (1) a structured project + node list produced by an earlier stage, and (2) the ORIGINAL source content for grounding. Your job is to attach short factual subnodes — INFORMATION and CONTEXT — to the nodes. You do NOT change the project, and you do NOT add, remove, rename, or re-date any node.
+>
+> VOICE — Declarative, factual, third person, neutral. NO opinion, speculation, or attempts to mimic anyone's voice.
+>
+> SUBNODES — INFORMATION vs CONTEXT
+> For each node, output up to 3 INFORMATION (facts, 1 sentence, ≤150 chars) and up to 3 CONTEXT (explanatory background, 2-3 sentences, ≤300 chars).
+> - INFORMATION = the "what." Direct factual claim from the source. Example: "The vendor confirmed delivery on April 15."
+> - CONTEXT = the "why" or "how." Background that explains a fact. Example: "The vendor is a Tier-1 supplier providing 60% of raw material."
+> - Split mixed sentences — facts to INFORMATION, background to CONTEXT. Never combine both in one subnode. When unsure, choose INFORMATION.
+> - Voice: declarative, factual, third person. Never invent.
+>
+> OUTPUT — Return ONLY a single JSON object (no markdown/fences/commentary). Per-node shape: `{ id, title, date, type, "informations": [ string ], "contexts": [ string ] }` (each 0–3 plain strings); preserve every node's id/title/date/type EXACTLY.
+- **Schema change:** Stage-2 per-node went from `contexts: [{body}]` to flat string
+  arrays `informations: [string]` + `contexts: [string]`. Persisted as `bubbles`
+  rows, `source='ai'`: `bubble_type='information'` (above the node) /
+  `'context'` (below). `supabase/ai-informations.sql` replaces `generate_ai_project`
+  to insert both loops (legacy `kind` stays `'context'`).
+
+### Subnode safety truncation
+- `truncateAtWord(text, max)` in `lib/llm/index.ts` (called by `mapSubnodes` inside
+  `toGenerationPayload`): cuts at the nearest word boundary before `max`, appends `…`
+  (final length ≤ max); hard-cuts only when there's no word break past 60% of the
+  limit (one long token). **Caps: INFORMATION ≤ 150, CONTEXT ≤ 300.** Runs ONLY at
+  generation (everything here is `source='ai'`). Returns
+  `{ payload, contextsTruncated, informationsTruncated }`; the route logs the pair
+  `{ contexts_truncated, informations_truncated }` and stores the SUM in the
+  `consumed` import_events `truncations` column (`supabase/import-truncations.sql`
+  adds it — tolerant: route retries without it if unmigrated). A user edit
+  (`updateBubble`) flips the row to `source='manual'`, so it never re-enters
+  truncation. **Notes are NOT AI-generated** (user-only by design).
+
+### Imports ledger (`supabase/imports-ledger.sql`)
+- `workspace_imports` (welcome bonus = 20) + `import_events` audit. RLS read-own;
+  writes locked to SECURITY DEFINER funcs / service role.
+- `consume_import(org)` — guarded atomic decrement + `consumed` event; flips
+  `welcome_bonus_consumed` at ≥5 used; returns `{ ok, reason?, remaining?, event_id }`.
+- `refund_import(org, project, tokens)` — increment + `refunded` event.
+- `generate_ai_project(org, user, payload)` — project + nodes + Contexts (`source='ai'`)
+  in ONE transaction; returns project id. **Persists every item as a `nodes` row** —
+  AI `type:"ambition"` items become future-dated nodes (NOT the native `ambitions`
+  table). One-line RPC change if that's ever wanted.
+
+### Error matrix (route → client copy)
+| Status | When | Copy |
+|---|---|---|
+| 413 | paste > 50,000 chars (before debit) | "That's too long — paste a smaller section (max 50,000 characters)." |
+| 401 / 403 | not signed in / viewer / no workspace | surfaced as-is |
+| 402 | `imports_remaining` = 0 | "You're out of imports. Top up or upgrade to keep generating." |
+| 504 | a stage timed out (30s) | "Generation failed. Your import is back in the bag. Try again, or simplify your paste." |
+| 500 | parse/validation/persist failure | same as 504 |
+- Client (`triggerGeneration`) surfaces the API's `error` field; dialog/bar stay open
+  with input preserved on every error. Success: set `GENERATED_FLAG`, navigate to
+  `/project/<id>`, flash toast there.
+
+### Imports indicator
+- Toolbar (`GenerateButton` header): shown only when `welcome_bonus_consumed` AND
+  `imports_remaining ≤ 5`; warm amber (`#b06a2c`) when ≤ 3. Dialog footer: ALWAYS
+  shows the real remaining count. Data fetched in `layer1/page.tsx` (tolerant; no row
+  = 20 / not-consumed).
+
+### Env
+- `ANTHROPIC_API_KEY` — server only (`.env.local` + Netlify). `LLM_PROVIDER` optional
+  (default `anthropic`). SDK install needed `NODE_OPTIONS=--use-system-ca` (corporate CA).
+
+## Adaptive Layer-2 layout (content-aware, no overlap)
+
+The serpentine layout in `Layer2Canvas.tsx` now sizes itself to actual sub-node
+footprints instead of fixed slots — fixing the overlap/clipping that AI projects
+(many Information + Context chips per node) produced.
+
+- **Chip natural height:** `SubnodeChip` body is `overflow: visible` by default
+  (`scroll` prop, only `true` when a user pins a height via resize → `overflow:auto`).
+  No more internal scroll arrows; a 4-line context is a 4-line chip.
+- **Real-height stacking:** `estChipH(text, w)` estimates a chip's height from text
+  length ÷ chars-per-line (≈ `(w-28)/6.6`) × line-height ~18 + 26 vpad (min 36). Each
+  node's bubbles stack per side with CUMULATIVE real heights + `SUB_GAP` (12), giving
+  `bubbleOffset` (per-bubble centre offset) and `reachAbove`/`reachBelow` (how far the
+  stack extends). `bubbleLayout` uses `bubbleOffset` as the default (drag/persisted
+  offsets still win). The old fixed `SUBNODE_H`/`STACK` slot survives only as a
+  fallback; `ROW_H` is gone.
+- **Adaptive rows:** per row, `maxAbove`/`maxBelow` = max reach of its nodes; row Y is
+  cumulative: `rowY[r] = rowY[r-1] + maxBelow[r-1] + ROW_VPAD(30) + maxAbove[r]`. So a
+  row with tall stacks pushes the next row down exactly enough — no overlap.
+- **Horizontal/time-gap layout UNTOUCHED:** x-spacing is still `spacingFor(gapDays)`
+  (≥ `MIN_SPACING` 200 ≥ `BUBBLE_W` 190, so adjacent chips already clear). The "~N
+  weeks later" annotations are unchanged.
+- **"Initial layout" = the render-time computation.** A fresh AI project has no
+  position overrides, so the adaptive layout IS what renders (no persist step, no
+  server-side layout). **"Re-run initial layout"** button (top-right of the canvas,
+  `canEdit` only) calls `resetL2Layout(projectId)` → nulls `nodes.l2_x/l2_y`,
+  `bubbles.x/y`, `notes.l2_x/l2_y/l2_w`, clears in-session overrides, `router.refresh()`
+  → algorithmic layout. This intentionally discards manual drags (per brief). Drag/
+  resize themselves are unchanged.
+- **Design note:** the brief framed this as "write positions to the layout store";
+  clearing overrides (so the responsive computed layout renders) is equivalent and
+  more robust than persisting absolute coordinates (which wouldn't survive a width
+  change). Per-row gap uses each row's own max reach (close to the brief's
+  "max(descending N, ascending N+1)").
+
+## BYO LLM (mechanical parse — zero AI on our side)
+
+User runs their content through their OWN LLM with our template, pastes the output
+back, and we parse it deterministically. No Anthropic call, no import cost.
+
+- **Architecture (5 files):**
+  - `src/lib/prompts/byo-template.txt` — the prompt template (canonical text).
+  - `src/lib/prompts/byoTemplate.ts` — `BYO_TEMPLATE` string mirror (imported by the
+    UI so it's always bundled; keep identical to the `.txt`).
+  - `src/lib/byo/parser.ts` — `parseByo(raw)` (pure) + `parser.test.ts` (vitest, `npm test`).
+  - `src/app/api/parse-byo/route.ts` — the endpoint.
+  - UI: the **BYO LLM** tab in `GenerateButton.tsx`; `parseByoRequest` in `layer1/generate.ts`.
+- **Sentinel grammar:** blocks separated by blank lines / `--- *** ___` rules. Each
+  line `KEY: VALUE` split on the FIRST colon, KEY trimmed+uppercased. Single-value:
+  `PROJECT TAGS DATE TITLE TYPE` (last wins). Repeating arrays: `INFO CONTEXT`.
+  Unknown keys / colon-less lines skipped silently. A block with PROJECT = metadata;
+  with DATE = event; neither = skip.
+- **Parser algorithm:** preprocess (CRLF→\n, strip leading whitespace + bullets
+  `- * •` + numbers `1. 2)` per line) → block-split → per-block parse → classify
+  (dates via **chrono-node**, multi-format; unparseable date → `skippedCount`) →
+  auto-project `Imported timeline · <earliest>` (sets `autoGenerated`) when no PROJECT
+  → sort by date asc → word-boundary truncate (INFO 150 / CONTEXT 300 → `truncatedCount`)
+  → cap 50. Returns `{ project{title,tags,autoGenerated}, events[{date,title,type,
+  informations[],contexts[]}], skippedCount, truncatedCount }`. (No per-event count
+  cap — template asks LLM for ≤3; parser keeps what it's given, char-truncates only.)
+- **API contract:** `POST /api/parse-byo { rawText }`. 400 empty / >200,000 chars;
+  401/403 auth/writer; **422** when 0 events AND auto project ("No structured timeline
+  content found…"); 200 `{ project_id, summary: { events, informations, contexts,
+  skipped, truncated } }`. Persists via `generate_ai_project(…, p_source:"byo")` — the
+  SAME atomic RPC as AI, now parameterised by source. **FREE:** no quota consume.
+- **Schema (`supabase/byo-source.sql`):** `bubbles.source` += `'byo'`;
+  `import_events.event_type` += `'byo'` (needed for the audit log — minimal additive
+  widening beyond the brief's "source only", flagged); `generate_ai_project` gains
+  `p_source text default 'ai'` (3-arg AI call still resolves via the default).
+  Audit row `event_type='byo'` stores `truncations` (tolerant); the fuller count
+  breakdown is returned in the response + console-logged (no columns for it).
+- **UI:** 5th tab "BYO LLM" → read-only template textarea + "Copy template" button,
+  editable "Paste your LLM output here", AI fields hidden, footer shows "Free — no
+  import cost" + submit "Parse · no import cost". Success → navigate + summary toast
+  (built client-side from `summary`, omitting the skipped/truncated clauses at 0).
+  422/400 → inline error (no navigate); other errors → message kept in the dialog.
+  The Layer-2 flash toast now reads a MESSAGE from `GENERATED_FLAG` (AI sets a fixed
+  string, BYO sets the parse summary).

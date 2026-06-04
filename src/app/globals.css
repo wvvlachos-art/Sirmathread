@@ -14,8 +14,15 @@
   --ink: #4d4327;            /* primary text on paper */
   --muted: #8f7f5b;          /* secondary text */
   --hairline: #cbbb96;       /* 1px borders/separators */
-  --note-fill: #f2e4a8;      /* sticky-note fill */
+  --note-fill: #f2e4a8;      /* sticky-note fill / Note chip band */
   --note-border: #cdb858;    /* sticky-note border */
+  /* Sub-node "Pantone chip" bands (Phase 1 visual pass). One per type; all
+     light enough for oxblood body text. *-code = muted corner-label ink. */
+  --note-code: #a87f33;
+  --context-fill: #e8b89a;   /* Context chip band — warm coral */
+  --context-code: #9c5234;
+  --info-fill: #d8c6e4;      /* Information chip band — light lavender */
+  --info-code: #6f5a8c;
   /* Editorial header (locked 2026-05-28). */
   --axis-bg: #e8ddc6;        /* calendar axis background — sibling to paper */
   --axis-ink: #5c5238;       /* month names (serif) */

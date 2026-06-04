@@ -29,6 +29,7 @@ import {
 import { createBubble, updateBubble, deleteBubble } from "../project/[id]/actions";
 import Link from "next/link";
 import MiniCalendar from "./MiniCalendar";
+import SubnodeChip from "@/app/SubnodeChip";
 import { useWand } from "./wand";
 import {
   NODE_FILL,
@@ -494,8 +495,8 @@ export default function Timeline({
   // Wave 2 — on-demand node content (email excerpt + notes + contexts).
   type NodeDetail = {
     email: { from: string; snippet: string; dateSent: string | null; threadUrl: string | null } | null;
-    notes: { id: string; body: string }[];
-    contexts: { id: string; content: string; kind: "context" | "information"; title: string | null }[];
+    notes: { id: string; body: string; code: string | null }[];
+    contexts: { id: string; content: string; kind: "context" | "information"; title: string | null; code: string | null }[];
   };
   const [nodeDetail, setNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1052,7 +1053,7 @@ export default function Timeline({
       const res = await createNote(lane?.id ?? "", nodeMenu.id, text, t, -60);
       setBusy(false);
       if (res.error || !res.id) return void alert("Could not add note: " + (res.error ?? "unknown error"));
-      setNodeDetail((d) => (d ? { ...d, notes: [...d.notes, { id: res.id!, body: text }] } : d));
+      setNodeDetail((d) => (d ? { ...d, notes: [...d.notes, { id: res.id!, body: text, code: res.code ?? null }] } : d));
       if (lane) addNoteToLane(lane.id, { id: res.id, body: text, x: t, y: -60, anchorT: t });
     } else {
       const res = await updateNoteBody(noteEdit.id, text);
@@ -1087,7 +1088,7 @@ export default function Timeline({
       const res = await createBubble(lane?.id ?? "", nodeMenu.id, text, "above", nodeMenu.label, lane?.name ?? "", ctxEdit.kind);
       setBusy(false);
       if (res.error || !res.id) return void alert("Could not add context: " + (res.error ?? "unknown error"));
-      setNodeDetail((d) => (d ? { ...d, contexts: [...d.contexts, { id: res.id!, content: text, kind: ctxEdit.kind, title: null }] } : d));
+      setNodeDetail((d) => (d ? { ...d, contexts: [...d.contexts, { id: res.id!, content: text, kind: ctxEdit.kind, title: null, code: res.code ?? null }] } : d));
     } else {
       const res = await updateBubble(ctxEdit.id, text);
       setBusy(false);
@@ -2054,22 +2055,22 @@ export default function Timeline({
                           </div>
                         ) : (
                           <div className="relative">
-                            <div
-                              className="overflow-hidden rounded-md shadow"
+                            {/* Compact Pantone Note chip: same band/colour language as
+                                Layer 2, but kept small — the corner code is hidden at
+                                this size (it surfaces on Layer 2 and the node panel). */}
+                            <SubnodeChip
+                              type="note"
+                              body={nt.body}
+                              showCode={false}
+                              compact
+                              clampLines={2}
+                              minHeight={0}
                               style={{
                                 width: noteSizes[nt.id] ?? NOTE_DEFAULT_W,
                                 height: noteHeight(noteSizes[nt.id] ?? NOTE_DEFAULT_W),
-                                background: NOTE_FILL,
-                                border: `1px solid ${NOTE_BORDER}`,
+                                overflow: "hidden",
                               }}
-                            >
-                              <span
-                                className="block whitespace-pre-wrap break-words px-1 py-0.5 text-[10px] leading-tight line-clamp-2"
-                                style={{ color: INK }}
-                              >
-                                {nt.body}
-                              </span>
-                            </div>
+                            />
                             <div
                               onPointerDown={(e) => {
                                 e.stopPropagation();
@@ -3101,13 +3102,8 @@ export default function Timeline({
                           </div>
                         </div>
                       ) : (
-                        <button
-                          key={n.id}
-                          onClick={() => setNoteEdit({ id: n.id, text: n.body })}
-                          className="rounded-md border px-2.5 py-1.5 text-left text-sm"
-                          style={{ background: NOTE_FILL, borderColor: NOTE_BORDER, color: INK, fontFamily: "Georgia, serif" }}
-                        >
-                          {n.body}
+                        <button key={n.id} onClick={() => setNoteEdit({ id: n.id, text: n.body })} className="block w-full text-left">
+                          <SubnodeChip type="note" body={n.body} code={n.code} />
                         </button>
                       )
                     )}
@@ -3169,16 +3165,8 @@ export default function Timeline({
                           </div>
                         </div>
                       ) : (
-                        <button
-                          key={c.id}
-                          onClick={() => setCtxEdit({ id: c.id, text: c.content, kind: c.kind })}
-                          className="rounded-md border-l-4 bg-paper px-2.5 py-1.5 text-left text-sm"
-                          style={{ borderColor: col, color: INK }}
-                        >
-                          <span className="block text-[9px] font-semibold uppercase tracking-wide" style={{ color: col }}>
-                            {c.kind === "information" ? "Information" : "Context"}
-                          </span>
-                          {c.content}
+                        <button key={c.id} onClick={() => setCtxEdit({ id: c.id, text: c.content, kind: c.kind })} className="block w-full text-left">
+                          <SubnodeChip type={c.kind} body={c.content} code={c.code} />
                         </button>
                       );
                     })}

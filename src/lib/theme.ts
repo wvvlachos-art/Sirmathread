@@ -12,6 +12,27 @@ export const HAIRLINE = "#cbbb96";
 export const NOTE_FILL = "#f2e4a8";
 export const NOTE_BORDER = "#cdb858";
 
+// --- Sub-node "Pantone chip" palette (Phase 1 visual pass) ------------------
+// One band colour per sub-node type. All three are light enough that the
+// default oxblood body text reads cleanly on them. The matching *_CODE colour
+// is the muted, lighter ink used for the small italic Pantone code in the
+// chip's bottom-right corner.
+export const NOTE_CODE = "#a87f33";       // amber-brown on yellow
+export const CONTEXT_FILL = "#e8b89a";    // warm coral / light terracotta
+export const CONTEXT_CODE = "#9c5234";    // burnt terracotta on coral
+export const INFO_FILL = "#d8c6e4";       // light lavender
+export const INFO_CODE = "#6f5a8c";       // muted violet on lavender
+
+// Sub-node chip type → its band fill, code ink, code letter prefix, and the
+// uppercase TYPE word shown before the code. The single source of truth used by
+// the shared SubnodeChip on all three surfaces (Layer 1, Layer 2, node panel).
+export type ChipType = "note" | "context" | "information";
+export const CHIP: Record<ChipType, { fill: string; code: string; prefix: string; label: string }> = {
+  note: { fill: NOTE_FILL, code: NOTE_CODE, prefix: "N", label: "NOTE" },
+  context: { fill: CONTEXT_FILL, code: CONTEXT_CODE, prefix: "C", label: "CONTEXT" },
+  information: { fill: INFO_FILL, code: INFO_CODE, prefix: "I", label: "INFO" },
+};
+
 // Editorial header tokens (mirrors --axis-* / --pill-* in globals.css).
 export const AXIS_BG = "#e8ddc6";
 export const AXIS_INK = "#5c5238";

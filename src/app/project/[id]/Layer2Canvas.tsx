@@ -2,14 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { NODE_FILL, OXBLOOD, MUTED, INK, PAPER_SURFACE, NOTE_FILL, NOTE_BORDER, ATTENTION_ALERT, darken } from "@/lib/theme";
-import { createBubble, updateBubble, updateBubbleMeta, updateBubbleSize, deleteBubble, updateBubblePosition, updateNodePosition, updateNodeSize, renameNode, setNodeState, setNodeType } from "./actions";
+import { NODE_FILL, OXBLOOD, MUTED, PAPER_SURFACE, NOTE_BORDER, ATTENTION_ALERT, CHIP, darken } from "@/lib/theme";
+import { createBubble, updateBubble, updateBubbleMeta, updateBubbleSize, deleteBubble, updateBubblePosition, updateNodePosition, updateNodeSize, renameNode, setNodeState, setNodeType, resetL2Layout } from "./actions";
 import { toggleNodeTag, updateNoteLayout } from "@/app/layer1/actions";
+import SubnodeChip from "@/app/SubnodeChip";
 
 export type TagCategory = { id: string; name: string; values: { id: string; value: string; color: string | null }[] };
 // User notes authored on Layer 1 (notes table). Shown on Layer 2, where they can
 // be dragged/resized via their own l2_* columns (x/y absolute centre, w width).
-export type L2NoteItem = { id: string; nodeId: string | null; body: string; x: number | null; y: number | null; w: number | null };
+export type L2NoteItem = { id: string; nodeId: string | null; body: string; x: number | null; y: number | null; w: number | null; code: string | null };
 
 // Layer 2 canvas: serpentine layout (time-aware spacing) inside a centered,
 // bounded column, with manual context bubbles and an approximate month band.
@@ -46,6 +47,7 @@ export type L2Bubble = {
   width: number | null; // px; null = default
   height: number | null; // px; null = auto
   shape: string | null; // 'rounded' (default) | 'square' | 'soft' | 'pill'
+  code: string | null; // stable Pantone code, e.g. "C-02" / "I-01" (null = pre-migration)
 };
 
 // Card shape → outer border-radius. Falls back to 'rounded'.
@@ -97,7 +99,6 @@ const BAND_W = 60;
 const COL_W = 1120; // bounded, centered column (~5 nodes per row)
 const PAD = 96; // left clears the band; right is symmetric margin
 const TOP = 84;
-const ROW_H = 150;
 const CORNER = 60;
 const LINEAR_MAX = 8;
 const DAY = 86_400_000;
@@ -120,9 +121,10 @@ const CONN = 22;
 const LABEL_SPACE = 36; // clearance below a node for caption + bars
 const STACK = 80;
 const BUBBLE_W = 190;
-const MANUAL_EDGE = "#5a7d8c"; // context sub-node (dusty blue)
-const INFO_EDGE = "#6f5a8c"; // information sub-node (muted violet)
-const edgeColor = (kind: BubbleKind) => (kind === "information" ? INFO_EDGE : MANUAL_EDGE);
+// Connector + socket colour matches the chip's band family (a darkened coral
+// for Context, darkened lavender for Information) so the wire reads as the same
+// material as the chip it leads to.
+const edgeColor = (kind: BubbleKind) => darken(CHIP[kind].fill, 0.38);
 const DBUB_W = 150; // demoted-node branch width
 const DNODE = 36; // demoted-node glyph size
 const SUBNODE_H = 64; // approx sub-node card height (for default stacking + canvas sizing)
@@ -191,6 +193,7 @@ export default function Layer2Canvas({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [layoutBusy, setLayoutBusy] = useState(false);
   // Node editing state. Rename + type are optimistic (local overrides, then a
   // fire-and-forget save) since they don't change the layout; demote/promote
   // reshuffle the spine, so those re-fetch via router.refresh() after the save.
@@ -262,26 +265,27 @@ export default function Layer2Canvas({
   // hydration mismatch that would otherwise tear down the interactive tree.
   if (!mounted) return <div ref={ref} className="flex-1 overflow-auto" />;
 
-  // ---- layout within the bounded column ----
-  const usable = COL_W - 2 * PAD;
+  // ---- horizontal layout + row index (time-gap spacing preserved untouched) ----
   const spans = nodes.map((n, i) => (i === 0 ? 0 : spacingFor((n.t - nodes[i - 1].t) / DAY)));
   const totalLinear = spans.reduce((a, b) => a + b, 0);
   // Small chains that fit in roughly one row render centered (horizontally, and
   // vertically when the page is short) rather than wrapping.
   const linear = nodes.length <= LINEAR_MAX && totalLinear + NODE <= COL_W - 40;
 
-  const positions: Pt[] = [];
-  let rows = 1;
+  const xs: number[] = [];
+  const rowOf: number[] = [];
   if (linear) {
     const startX = (COL_W - totalLinear) / 2;
     let x = startX;
     nodes.forEach((_, i) => {
       x += spans[i];
-      positions.push({ x: i === 0 ? startX : x, y: TOP });
+      xs.push(i === 0 ? startX : x);
+      rowOf.push(0);
     });
   } else {
     let row = 0, dir = 1, x = PAD;
-    positions.push({ x, y: TOP });
+    xs.push(x);
+    rowOf.push(0);
     for (let i = 1; i < nodes.length; i++) {
       const nx = x + dir * spans[i];
       const overR = dir === 1 && nx + NODE / 2 > COL_W - PAD;
@@ -289,27 +293,90 @@ export default function Layer2Canvas({
       if (overR || overL) {
         row++;
         dir = -dir;
-        positions.push({ x, y: TOP + row * ROW_H });
+        xs.push(x);
+        rowOf.push(row);
       } else {
         x = nx;
-        positions.push({ x, y: TOP + row * ROW_H });
+        xs.push(x);
+        rowOf.push(row);
       }
     }
-    rows = row + 1;
   }
+  const numRows = (rowOf[rowOf.length - 1] ?? 0) + 1;
 
-  // Apply custom node positions on top of the auto layout: live drag override →
-  // persisted px/py → automatic serpentine slot. Everything downstream (wire,
-  // bubbles, demoted branches, month band) reads from `positions`, so it all
-  // follows a dragged node.
-  nodes.forEach((n, i) => {
-    const o = nodePos[n.id] ?? (n.px != null && n.py != null ? { x: n.px, y: n.py } : null);
-    if (o) positions[i] = o;
-  });
   // Resolved per-node size (live resize override → persisted pw → default NODE).
   const sizeById = new Map<string, number>();
   nodes.forEach((n) => sizeById.set(n.id, nodeSize[n.id] ?? n.pw ?? NODE));
   const szOf = (id: string) => sizeById.get(id) ?? NODE;
+
+  // ---- adaptive vertical layout: stack sub-nodes at their REAL estimated height
+  // so they never overlap, and size each row to the actual footprints above/below
+  // it (replaces the old fixed SUBNODE_H slot + fixed ROW_H). ----
+  const SUB_GAP = 12; // vertical gap between stacked sub-nodes
+  const ROW_VPAD = 30; // padding between one row's lowest chip and the next row's highest
+  // Estimate a chip's rendered height from its text + width (no DOM measure).
+  const estChipH = (text: string, w: number) => {
+    const cpl = Math.max(8, Math.floor((w - 28) / 6.6)); // chars per line at 13px serif
+    const lines = Math.max(1, Math.ceil((text.trim().length || 1) / cpl));
+    return Math.max(36, Math.round(lines * 18 + 26)); // line-height ~18 + 26 vpad
+  };
+  // Stack each node's bubbles per side with cumulative real heights; record each
+  // bubble's offset from the node centre and how far the stack reaches up/down.
+  const bubbleOffset = new Map<string, { x: number; y: number }>();
+  const bubbleH = new Map<string, number>();
+  const reachAbove: Record<string, number> = {};
+  const reachBelow: Record<string, number> = {};
+  {
+    const cursor: Record<string, number> = {}; // key = `${nodeId}|${side}` → distance used so far
+    for (const b of bubbles) {
+      const half = szOf(b.nodeId) / 2;
+      const w = bubbleSize[b.id]?.w ?? b.width ?? BUBBLE_W;
+      const h = bubbleSize[b.id]?.h ?? b.height ?? estChipH(b.content, w);
+      bubbleH.set(b.id, h);
+      const key = `${b.nodeId}|${b.side}`;
+      if (cursor[key] === undefined) cursor[key] = half + (b.side === "above" ? CONN : LABEL_SPACE + CONN);
+      const centerDist = cursor[key] + h / 2;
+      bubbleOffset.set(b.id, { x: 0, y: b.side === "above" ? -centerDist : centerDist });
+      cursor[key] = centerDist + h / 2 + SUB_GAP;
+      const reach = centerDist + h / 2;
+      if (b.side === "above") reachAbove[b.nodeId] = Math.max(reachAbove[b.nodeId] ?? half, reach);
+      else reachBelow[b.nodeId] = Math.max(reachBelow[b.nodeId] ?? half + LABEL_SPACE, reach);
+    }
+    // Fold any attached notes' downward extent into the below reach (defensive —
+    // AI projects have no notes; user notes stack lower-left below the node).
+    const noteCnt: Record<string, number> = {};
+    notes.forEach((nt) => {
+      const a = nt.nodeId && nodes.some((n) => n.id === nt.nodeId) ? nt.nodeId : nodes[0]?.id;
+      if (a) noteCnt[a] = (noteCnt[a] ?? 0) + 1;
+    });
+    for (const n of nodes) {
+      const c = noteCnt[n.id] ?? 0;
+      if (c) reachBelow[n.id] = Math.max(reachBelow[n.id] ?? szOf(n.id) / 2 + LABEL_SPACE, szOf(n.id) / 2 + 8 + c * 60 + 20);
+    }
+  }
+
+  // Per-row required clearance above/below, then cumulative row Y.
+  const maxAbove = Array.from({ length: numRows }, () => 0);
+  const maxBelow = Array.from({ length: numRows }, () => 0);
+  nodes.forEach((n, i) => {
+    const r = rowOf[i];
+    const half = szOf(n.id) / 2;
+    maxAbove[r] = Math.max(maxAbove[r], reachAbove[n.id] ?? half);
+    maxBelow[r] = Math.max(maxBelow[r], reachBelow[n.id] ?? half + LABEL_SPACE);
+  });
+  const rowY: number[] = [];
+  rowY[0] = TOP + maxAbove[0];
+  for (let r = 1; r < numRows; r++) rowY[r] = rowY[r - 1] + maxBelow[r - 1] + ROW_VPAD + maxAbove[r];
+
+  const positions: Pt[] = nodes.map((n, i) => ({ x: xs[i], y: rowY[rowOf[i]] }));
+
+  // Apply custom node positions on top of the auto layout: live drag override →
+  // persisted px/py → adaptive slot. Everything downstream (wire, bubbles, demoted
+  // branches, month band) reads from `positions`, so it all follows a dragged node.
+  nodes.forEach((n, i) => {
+    const o = nodePos[n.id] ?? (n.px != null && n.py != null ? { x: n.px, y: n.py } : null);
+    if (o) positions[i] = o;
+  });
   const nodeBottom = positions.reduce((m, p, i) => Math.max(m, p.y + szOf(nodes[i].id) / 2), 0) + 70;
 
   // ---- demoted nodes branch off the nearest spine node (by time) ----
@@ -354,22 +421,28 @@ export default function Layer2Canvas({
     .filter((x): x is { b: L2Bubble; np: Pt & { label: string }; k: number } => !!x);
 
   const clampX = (x: number) => Math.max(BUBBLE_W / 2 + 4, Math.min(COL_W - BUBBLE_W / 2 - 4, x));
-  // Default slot for an un-dragged sub-node: stacked above/below the node, as an
-  // OFFSET from the node centre (cards are centre-anchored).
+  // Fallback fixed-slot offset, used only if the adaptive `bubbleOffset` somehow
+  // lacks an entry (it shouldn't — it's computed from the same `bubbles`).
   const defaultOffset = (side: "above" | "below", k: number, half: number) =>
     side === "above"
       ? { x: 0, y: -(half + CONN + SUBNODE_H / 2 + k * STACK) }
       : { x: 0, y: half + LABEL_SPACE + CONN + SUBNODE_H / 2 + k * STACK };
 
   // Resolve each bubble to an absolute centre. Priority: live drag / saved
-  // override → persisted x/y offset → default stack slot.
+  // override → persisted x/y offset → adaptive real-height stack slot.
   const bubbleLayout = instances.map(({ b, np, k }) => {
-    const off = bubblePos[b.id] ?? (b.x != null && b.y != null ? { x: b.x, y: b.y } : defaultOffset(b.side, k, szOf(b.nodeId) / 2));
+    const off =
+      bubblePos[b.id] ??
+      (b.x != null && b.y != null
+        ? { x: b.x, y: b.y }
+        : bubbleOffset.get(b.id) ?? defaultOffset(b.side, k, szOf(b.nodeId) / 2));
+    // Live resize override → persisted width/height → default (width BUBBLE_W,
+    // height auto). h === null means the chip auto-sizes to its content.
     const w = bubbleSize[b.id]?.w ?? b.width ?? BUBBLE_W;
-    const h = bubbleSize[b.id]?.h ?? b.height ?? null; // null = auto (content) height
+    const h = bubbleSize[b.id]?.h ?? b.height ?? null;
     return { b, np, k, off, w, h, cx: clampX(np.x + off.x), cy: np.y + off.y };
   });
-  const bubbleBottom = bubbleLayout.reduce((m, l) => Math.max(m, l.cy + (l.h ?? SUBNODE_H) / 2 + 20), 0);
+  const bubbleBottom = bubbleLayout.reduce((m, l) => Math.max(m, l.cy + (l.h ?? bubbleH.get(l.b.id) ?? SUBNODE_H) / 2 + 20), 0);
 
   // ---- Layer-1 user notes, anchored to their node ----
   // The Layer-1 x/y are timeline coords and don't translate here, so notes carry
@@ -393,7 +466,8 @@ export default function Layer2Canvas({
     .filter((v): v is { nt: L2NoteItem; np: Pt & { label: string }; cx: number; cy: number; w: number } => !!v);
   const noteBottom = noteInstances.reduce((m, n) => Math.max(m, n.cy + 60), 0);
 
-  const height = Math.max(TOP + (rows - 1) * ROW_H + NODE / 2 + STACK + 90, demotedBottom + 40, bubbleBottom + 40, nodeBottom, noteBottom);
+  const lastRowBottom = rowY[numRows - 1] + maxBelow[numRows - 1] + 60;
+  const height = Math.max(lastRowBottom, demotedBottom + 40, bubbleBottom + 40, nodeBottom, noteBottom);
 
   // ---- approximate month band (orientation aid, not to scale) ----
   const monthBands: { label: string; y: number }[] = [];
@@ -448,7 +522,7 @@ export default function Layer2Canvas({
       const res = await createBubble(projectId, editing.nodeId, text, editing.side, label, projectName, btype);
       setBusy(false);
       if (res.error || !res.id) return void alert(res.error ?? "Could not save.");
-      setBubbles((prev) => [...prev, { id: res.id!, nodeId: editing.nodeId, content: text, side: editing.side, source: "manual", kind: btype, x: null, y: null, title: null, width: null, height: null, shape: null }]);
+      setBubbles((prev) => [...prev, { id: res.id!, nodeId: editing.nodeId, content: text, side: editing.side, source: "manual", kind: btype, x: null, y: null, title: null, width: null, height: null, shape: null, code: res.code ?? null }]);
     } else {
       const title = editing.title.trim() || null;
       const shape = editing.shape;
@@ -541,6 +615,33 @@ export default function Layer2Canvas({
     router.refresh(); // demote/promote reshapes the spine — re-fetch the layout
   };
 
+  // "Re-run initial layout": discard every manual position (server + local) so the
+  // adaptive auto-layout takes over. Deliberately overwrites user drags.
+  const rerunLayout = async () => {
+    setLayoutBusy(true);
+    const res = await resetL2Layout(projectId);
+    if (res.error) {
+      setLayoutBusy(false);
+      return void alert(res.error);
+    }
+    // Clear in-session overrides immediately; refresh re-fetches the now-null
+    // persisted positions so the algorithmic layout is what renders.
+    setNodePos({});
+    nodePosRef.current = {};
+    setBubblePos({});
+    bubblePosRef.current = {};
+    setNotePos({});
+    notePosRef.current = {};
+    setNodeSize({});
+    nodeSizeRef.current = {};
+    setBubbleSize({});
+    bubbleSizeRef.current = {};
+    setNoteWidth({});
+    noteWidthRef.current = {};
+    setLayoutBusy(false);
+    router.refresh();
+  };
+
   const fmt = (iso: string) => {
     const d = new Date(iso + "T00:00:00Z");
     return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
@@ -548,7 +649,20 @@ export default function Layer2Canvas({
 
   return (
     <div ref={ref} className="flex-1 overflow-auto">
-      <div className="flex min-h-full justify-center" style={{ alignItems: height < vh ? "center" : "flex-start" }}>
+      {/* Re-run initial layout — pinned top-right; resets all manual positions */}
+      {canEdit && (
+        <div className="pointer-events-none sticky top-0 z-30 flex justify-end px-4 py-2">
+          <button
+            onClick={rerunLayout}
+            disabled={layoutBusy}
+            title="Reset every sub-node and node to the automatic layout (discards manual drags)"
+            className="pointer-events-auto rounded-md border border-hairline bg-paper-surface px-3 py-1 text-xs text-ink shadow-sm hover:bg-paper disabled:opacity-60"
+          >
+            {layoutBusy ? "Re-laying out…" : "Re-run initial layout"}
+          </button>
+        </div>
+      )}
+      <div className="flex min-h-full justify-center" style={{ alignItems: height < vh ? "center" : "flex-start", marginTop: canEdit ? -36 : 0 }}>
         <div className="relative" style={{ width: COL_W, height }}>
           <svg width={COL_W} height={height} className="absolute inset-0" role="img" aria-label="Project node chain">
             {/* month band */}
@@ -931,16 +1045,12 @@ export default function Layer2Canvas({
             </div>
           ))}
 
-          {/* sub-node cards (draggable + resizable, editable title + shape) */}
+          {/* sub-node chips — Pantone chips (draggable; click to edit; corner to
+              resize). Width = slot width; height auto unless the user resizes. */}
           {bubbleLayout.map(({ b, cx, cy, off, w, h }) => {
             if (editing?.kind === "edit" && editing.bubbleId === b.id) return null;
             const dragging = draggingBubble === b.id;
             const resizing = resizingBubble === b.id;
-            const titleText = (b.title && b.title.trim()) || deriveTitle(b.content) || "Untitled";
-            const bodyText = b.content.trim();
-            const showBody = bodyText !== "" && bodyText !== titleText;
-            const radius = SHAPE_RADIUS[b.shape ?? "rounded"] ?? SHAPE_RADIUS.rounded;
-            const edge = edgeColor(b.kind);
             return (
               <div
                 key={b.id}
@@ -993,24 +1103,9 @@ export default function Layer2Canvas({
                     : undefined
                 }
               >
-                <div
-                  className="overflow-hidden shadow-md"
-                  style={{ border: `1.5px solid ${edge}`, background: PAPER_SURFACE, borderRadius: radius, height: h ?? undefined, display: "flex", flexDirection: "column" }}
-                >
-                  <div className="flex shrink-0 items-center gap-1.5 px-2 py-1" style={{ background: edge }}>
-                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: PAPER_SURFACE }} />
-                    <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.4px]" style={{ color: PAPER_SURFACE }}>
-                      {titleText}
-                    </span>
-                  </div>
-                  {showBody && (
-                    <div className="overflow-auto px-2 py-1.5" style={{ fontFamily: "Georgia, serif", fontSize: 12.5, color: INK, lineHeight: 1.35, flex: h ? "1 1 auto" : undefined }}>
-                      {b.content}
-                    </div>
-                  )}
-                </div>
+                <SubnodeChip type={b.kind} body={b.content} code={b.code} scroll={h != null} style={{ height: h ?? undefined }} />
 
-                {/* corner resize handle */}
+                {/* corner resize handle (width + height) */}
                 {canEdit && (hovered === `b-${b.id}` || resizing) && (
                   <div
                     title="Drag to resize"
@@ -1029,8 +1124,8 @@ export default function Layer2Canvas({
                       if (resizingBubble !== b.id) return;
                       e.stopPropagation();
                       const cur = bubbleSizeRef.current[b.id] ?? { w, h: h ?? 80 };
-                      const nw = Math.max(120, Math.min(380, cur.w + e.movementX));
-                      const nh = Math.max(44, Math.min(440, cur.h + e.movementY));
+                      const nw = Math.max(104, Math.min(380, cur.w + e.movementX));
+                      const nh = Math.max(32, Math.min(440, cur.h + e.movementY));
                       const dw = nw - cur.w,
                         dh = nh - cur.h;
                       if (!dw && !dh) return;
@@ -1055,7 +1150,7 @@ export default function Layer2Canvas({
                     }}
                   >
                     <svg width={14} height={14} viewBox="0 0 14 14">
-                      <path d="M13 5 L5 13 M13 9 L9 13" stroke={edge} strokeWidth={1.5} strokeLinecap="round" />
+                      <path d="M13 5 L5 13 M13 9 L9 13" stroke={edgeColor(b.kind)} strokeWidth={1.5} strokeLinecap="round" />
                     </svg>
                   </div>
                 )}
@@ -1063,7 +1158,7 @@ export default function Layer2Canvas({
             );
           })}
 
-          {/* Layer-1 notes — draggable + resizable amber cards (Layer-2-only; edit text in the overview) */}
+          {/* Layer-1 notes shown on L2 — Pantone Note chips (draggable; corner to resize width; edit text in the overview) */}
           {noteInstances.map(({ nt, cx, cy, w }) => {
             const dragging = draggingNoteCard === nt.id;
             const resizing = resizingNoteCard === nt.id;
@@ -1116,31 +1211,8 @@ export default function Layer2Canvas({
                     : undefined
                 }
               >
-                <div className="overflow-hidden rounded-md shadow-md" style={{ border: `1.5px solid ${NOTE_BORDER}`, background: NOTE_FILL }}>
-                  <div className="flex items-center gap-1.5 px-2 py-1" style={{ background: NOTE_BORDER }}>
-                    <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: NOTE_FILL }} />
-                    <span className="text-[9px] font-semibold uppercase tracking-[0.4px]" style={{ color: "#5c4a1e" }}>
-                      Note
-                    </span>
-                  </div>
-                  <div
-                    className="px-2 py-1.5"
-                    style={
-                      {
-                        fontFamily: "Georgia, serif",
-                        fontSize: 12.5,
-                        color: INK,
-                        lineHeight: 1.35,
-                        display: "-webkit-box",
-                        WebkitLineClamp: 6,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                      } as React.CSSProperties
-                    }
-                  >
-                    {nt.body}
-                  </div>
-                </div>
+                <SubnodeChip type="note" body={nt.body} code={nt.code} />
+
                 {/* width resize handle (bottom-right) */}
                 {canEdit && (hovered === `note-${nt.id}` || resizing) && (
                   <div
@@ -1159,7 +1231,7 @@ export default function Layer2Canvas({
                       if (resizingNoteCard !== nt.id) return;
                       e.stopPropagation();
                       const cur = noteWidthRef.current[nt.id] ?? w;
-                      const next = Math.max(120, Math.min(320, cur + e.movementX));
+                      const next = Math.max(104, Math.min(320, cur + e.movementX));
                       const ns = { ...noteWidthRef.current, [nt.id]: next };
                       noteWidthRef.current = ns;
                       setNoteWidth(ns);

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Layer2Canvas, { type L2Node, type L2Bubble, type NodeType, type TagCategory, type L2NoteItem } from "./Layer2Canvas";
+import GenerationToast from "./GenerationToast";
 
 // Same deadline-stage rule as Layer 1 (0 = none, 1..4 = perimeter quarters).
 function deadlineStage(deadline: string | null, setAt: string | null): number {
@@ -186,6 +187,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     width: null as number | null,
     height: null as number | null,
     shape: null as string | null,
+    code: null as string | null,
   }));
 
   // Optional sub-node styling (title/size/shape) lives in columns added by a
@@ -211,6 +213,16 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // Stable Pantone codes (column from supabase/pantone-codes.sql). Tolerant
+  // overlay so the page still renders before that migration runs.
+  {
+    const { data: codeRows, error: codeErr } = await supabase.from("bubbles").select("id, pantone_code").eq("project_id", id);
+    if (!codeErr) {
+      const byId = new Map(((codeRows ?? []) as { id: string; pantone_code: string | null }[]).map((r) => [r.id, r.pantone_code]));
+      for (const b of bubbles) b.code = byId.get(b.id) ?? null;
+    }
+  }
+
   // Layer-1 user notes for this project — shown on Layer 2 (draggable/resizable
   // there via their own l2_* columns; the basic fetch always works).
   const { data: noteRows } = await supabase
@@ -220,7 +232,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     .is("deleted_at", null);
   const notes: L2NoteItem[] = ((noteRows ?? []) as { id: string; node_id: string | null; body: string | null }[])
     .filter((n) => (n.body ?? "").trim() !== "")
-    .map((n) => ({ id: n.id, nodeId: n.node_id, body: n.body ?? "", x: null as number | null, y: null as number | null, w: null as number | null }));
+    .map((n) => ({ id: n.id, nodeId: n.node_id, body: n.body ?? "", x: null as number | null, y: null as number | null, w: null as number | null, code: null as string | null }));
   // Layer-2 note position/size (separate tolerant query — later migration).
   {
     const { data: layoutRows, error: layoutErr } = await supabase
@@ -238,6 +250,14 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           n.w = r.l2_w;
         }
       }
+    }
+  }
+  // Note Pantone codes (column from supabase/pantone-codes.sql). Tolerant.
+  {
+    const { data: codeRows, error: codeErr } = await supabase.from("notes").select("id, pantone_code").eq("project_id", id).is("deleted_at", null);
+    if (!codeErr) {
+      const byId = new Map(((codeRows ?? []) as { id: string; pantone_code: string | null }[]).map((r) => [r.id, r.pantone_code]));
+      for (const n of notes) n.code = byId.get(n.id) ?? null;
     }
   }
 
@@ -282,6 +302,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         projectId={project.id}
         projectName={name}
       />
+      <GenerationToast />
     </main>
   );
 }

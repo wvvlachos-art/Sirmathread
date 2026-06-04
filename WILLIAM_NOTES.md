@@ -276,3 +276,151 @@ overview / in the node panel and shows in both places.
 
 (One-time setup: run `supabase/note-layout.sql` so note positions/sizes are saved
 between visits.)
+
+### New look for notes & context — "Pantone chips" + reference codes
+
+All the little note/context cards now share **one clean design** everywhere they
+show up (the overview swim-lane, the Layer-2 project page, and the node panel):
+
+- A **coloured card** with the text written directly on the colour in our
+  signature oxblood ink, a subtle 4px-rounded corner, and a soft shadow — like a
+  paint-chip. One colour per type:
+  - **Note** → warm yellow
+  - **Context** → coral
+  - **Information** → soft lavender
+- Each card carries a small **reference code** in the bottom-right corner, e.g.
+  **`NOTE · N-04`**, **`CONTEXT · C-02`**, **`INFO · I-01`**. The number counts up
+  per node, separately for each type, in the order you added them. **Codes are
+  permanent:** if you delete N-02, the others keep their numbers (N-01 stays N-01,
+  N-03 stays N-03) and the next new one continues from the highest. You can use a
+  code to refer to a specific note in conversation or when prompting the AI later.
+- Cards **grow taller to fit their text** and fill the width of their spot — no
+  more manually resizing the little sub-cards in Layer 2 (that was removed on
+  purpose; you can still drag them to move them). The tiny notes on the overview
+  stay small, so their code is hidden there — look on the project page or the node
+  panel to see the code.
+
+**One-time setup:** run **`supabase/pantone-codes.sql`** in Supabase so the
+reference codes are saved and stay stable. (Until you run it, everything still
+works — the cards just won't show a code yet.)
+
+### "Generate a project" button + quick paste bar (AI not wired yet)
+
+There's a new **Generate** button in the top toolbar, just left of "+ New
+project". Click it and a dialog opens where you can:
+- pick a **source** (Auto-detect, Gmail thread, Meeting notes, Brain dump),
+- **paste** an email thread / notes / any text (up to 50,000 characters),
+- optionally type a **project name** and **tag hints** (or leave them blank).
+
+There's also a slim **quick paste bar** just under the toolbar. Type or paste
+into it and a small **Generate** button appears on the right; press Enter or
+click it to submit. You can even press **⌘V / Ctrl+V anywhere on the page** (when
+you're not typing in another box) and your clipboard drops straight into that bar.
+
+**Important — the AI isn't connected yet.** This is just the screen + the buttons.
+When you submit, **nothing is created and no "imports" are used** — it simply
+captures what you typed and shows a little message: *"Generation queued (AI not
+yet wired up)."* The actual AI that reads your text and builds a project is a
+separate piece of work coming next. (The "12 imports remaining" number is a
+placeholder for now too.)
+
+### Generate is now LIVE — the AI actually builds the project
+
+(This replaces the "AI isn't connected yet" note above.) When you click **Generate**
+(in the dialog) or hit Enter in the quick paste bar, Sirmathread now really reads
+your pasted text with AI and builds a project for you:
+
+- It runs in **two passes** — first it pulls out the **timeline of events** (the
+  nodes), then it writes short **Context notes** on the events that need them.
+- It only keeps **meaningful events** (it skips out-of-office replies, "thanks!",
+  signatures, etc.), consolidates a back-and-forth about the same thing into one
+  node, writes tight 2–6 word titles, and never invents dates or facts.
+- Past/today events become **nodes**; future ones become **future items**. It picks
+  a project title, detects tags (people, orgs, topics), and only sets a deadline if
+  one was actually stated.
+
+**What you see:** while it's working, a *"Generating your project…"* spinner shows
+(it usually takes well under 30 seconds). On success it drops you straight onto the
+new project's **Layer 2** page with a note: *"Project generated. Edit anything you
+want — AI did a first pass."* Everything it made is fully editable — treat it as a
+first draft, not a final answer.
+
+**If something goes wrong** (too long, timed out, a hiccup), it tells you and **your
+import is automatically refunded** — you only "spend" an import on a successful
+generation. Your typed text stays in the box so you can just try again.
+
+### Imports (your generation allowance)
+
+- Each workspace starts with **20 free imports** (the welcome bonus). One generation
+  = one import.
+- You'll start seeing a small **"X imports remaining"** note next to the Generate
+  button once you're running low (5 or fewer), and it turns a **warm amber** at 3 or
+  fewer. The Generate dialog always shows your current balance at the bottom.
+- At **0 imports** you'll see *"You're out of imports. Top up or upgrade to keep
+  generating."* (Buying more is a later feature — for now it just stops at zero.)
+
+**One-time setup:** the AI needs an API key — make sure **`ANTHROPIC_API_KEY`** is set
+in `.env.local` (local) and in Netlify (for the live site). Without it, generation
+fails cleanly and refunds the import.
+
+### Shorter, tidier context notes
+
+The AI now writes **shorter Context notes** — 2–3 short sentences instead of long
+paragraphs — so they fit cleanly inside their bubbles. There's a hard safety limit
+of 300 characters: if the AI ever writes a longer one, it's trimmed at the end of a
+word with a "…". This only applies to **AI-written** contexts — anything **you** type
+or edit is never trimmed, no matter how long.
+
+### Two kinds of AI subnodes: Information and Context
+
+When the AI reads your paste, it now creates **two distinct kinds** of little
+subnodes on each event:
+
+- **Information** (the *what*) — a single flat fact pulled straight from the source,
+  e.g. *"The vendor confirmed delivery on April 15."* Kept very short (max 150
+  characters).
+- **Context** (the *why / how*) — a sentence or two of background that explains a
+  fact, e.g. *"The vendor is a Tier-1 supplier providing 60% of our raw material."*
+  (max 300 characters).
+
+It splits mixed sentences so a fact and its explanation never end up crammed into the
+same bubble. They show in their own colours (Information chips look different from
+Context chips). **Notes stay 100% yours** — the AI never creates or touches Notes.
+
+### Layer 2 now arranges itself to fit the content
+
+When a project is generated, Layer 2 now **lays itself out around the actual size of
+each bubble** — taller bubbles get more room, rows space themselves apart so nothing
+overlaps, and bubbles show their full text (no more little up/down scroll arrows
+inside them). You shouldn't have to drag things around just to make them readable.
+
+- **Drag-and-drop still works exactly the same** — move or resize anything to fine-tune
+  it, and your changes stick.
+- There's a **"Re-run initial layout"** button at the top-right of a project. Click it
+  to throw away your manual arrangement and snap everything back to the automatic,
+  no-overlap layout — handy after you've added or deleted a lot of bubbles.
+
+### "BYO LLM" — bring your own AI (free, private)
+
+There's a **fifth tab** in the Generate dialog: **BYO LLM**. It lets you build a
+project using **your own** AI (ChatGPT, Claude, whatever you like) instead of ours —
+so it's **completely free** (no imports used) and your content never goes through our
+AI at all.
+
+How it works:
+1. Open **Generate → BYO LLM**. The top box shows a **prompt template** — click
+   **"Copy template"**.
+2. Paste that template into your own LLM, and replace `[paste content here]` with your
+   email thread / notes / whatever.
+3. Your LLM spits out a neat formatted timeline. Copy it.
+4. Paste it into the **"Paste your LLM output here"** box and click **"Parse · no
+   import cost"**.
+
+Sirmathread then reads that output **mechanically** (no AI on our side — just careful
+text parsing) and builds the project, with the same Information and Context bubbles.
+It's forgiving of messiness — extra chatter from your LLM, bullet points, and
+different date formats all get handled. Events without a real date are skipped (it
+tells you how many), and over-long bubbles get trimmed. You'll land on the new project
+with a quick summary of what was parsed.
+
+**One-time setup:** run **`supabase/byo-source.sql`** so BYO projects can be saved.

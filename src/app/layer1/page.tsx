@@ -6,6 +6,9 @@ import { resolveActiveOrg, listMyOrgs } from "@/lib/activeOrg";
 import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
 import NewProjectButton from "./NewProjectButton";
+import GenerateButton from "./GenerateButton";
+import QuickPasteBar from "./QuickPasteBar";
+import ToastHost from "./Toast";
 import { WandProvider } from "./wand";
 
 // ---- Types -------------------------------------------------------------------
@@ -96,6 +99,23 @@ export default async function Layer1Page({
   // Which workspace are we viewing? (cookie-backed switcher)
   const activeOrg = await resolveActiveOrg(supabase, user.id);
   const myOrgs = await listMyOrgs(supabase, user.id);
+
+  // AI-generation import balance for the active workspace. The ledger row is
+  // created lazily on first generation, so "no row yet" = the full 20-import
+  // welcome bonus, not yet consumed. Tolerant of the table not existing yet.
+  let importsRemaining = 20;
+  let welcomeBonusConsumed = false;
+  if (activeOrg) {
+    const { data: impRow } = await supabase
+      .from("workspace_imports")
+      .select("imports_remaining, welcome_bonus_consumed")
+      .eq("workspace_id", activeOrg.id)
+      .maybeSingle();
+    if (impRow) {
+      importsRemaining = (impRow as { imports_remaining: number }).imports_remaining;
+      welcomeBonusConsumed = (impRow as { welcome_bonus_consumed: boolean }).welcome_bonus_consumed;
+    }
+  }
   const { data: profileRow } = await supabase
     .from("profiles")
     .select("display_name")
@@ -346,6 +366,7 @@ export default async function Layer1Page({
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <GenerateButton importsRemaining={importsRemaining} welcomeBonusConsumed={welcomeBonusConsumed} />
           <NewProjectButton />
           <AccountMenu
             email={user.email ?? ""}
@@ -355,6 +376,8 @@ export default async function Layer1Page({
           />
         </div>
       </header>
+
+      <QuickPasteBar />
 
       <WandProvider>
         <Toolbar categories={tagCatalog} hiddenCount={universe.length - lanes.length} />
@@ -372,6 +395,7 @@ export default async function Layer1Page({
           />
         )}
       </WandProvider>
+      <ToastHost />
     </main>
   );
 }
