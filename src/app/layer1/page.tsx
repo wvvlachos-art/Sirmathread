@@ -305,6 +305,7 @@ export default async function Layer1Page({
       lastActivityAt: p.last_activity_at,
       archived: p.state === "archived",
       inactive,
+      deadline: p.deadline ?? null,
       nodes,
       tags: (p.project_tag_values ?? []).map((t) => t.tag_value_id),
       ambitions: (p.ambitions ?? [])

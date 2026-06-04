@@ -185,3 +185,94 @@ After that, we build features in this order: Gmail OAuth → email sync → Clau
 - Domain (Porkbun): ✅ _sirmathread.com — purchased_
 - Google Cloud Console: ✅ _project "Sirmathread" created; OAuth set up for "Sign in with Google" (used for login now, will extend to Gmail later). Client ID/secret stored privately in `.env.local`._
 - Anthropic API key: ✅ _created, stored securely by William — will live in Netlify env var when deployed_
+
+---
+
+## Wave 2 — the node panel (clicking a node in the overview)
+
+**What changed (Phase 1):** Clicking a node used to pop up a small box in the
+middle of the screen with a "Save title / date" button. That's gone. Now a
+clean panel **slides in from the right** with the page dimmed behind it.
+
+In the panel you can:
+- **Rename** the node — just type in the title at the top. It saves by itself
+  when you click away or press Enter (no Save button). If something goes wrong
+  it puts the old title back and shows a small red message.
+- **Change the date** (manual nodes only) — click the date under the title and
+  pick a new one. Email nodes keep the email's date.
+- **Deadline** — a chip shows "Due <date>" (with a little ✕ to clear it) or
+  "Set deadline" if there isn't one. Click it to pick/change the date.
+- **Complete** — a chip toggles the node between Complete (green) and Incomplete.
+- **Tags** — the tags currently on the node show as coloured pills; hover one to
+  get an ✕ to remove it. Click **+ Tag** to open a little menu listing every tag
+  in every category so you can add from any of them.
+- **Delete** — bottom-left, with a "Delete this node? Yes / Cancel" confirm step.
+
+Close it with the ✕ in the corner or by clicking the dimmed area.
+
+**Still coming (Phase 2):** under the metadata, the panel will also show the
+email excerpt, all the Notes and Context bubbles attached to that node, and an
+**"Open in Layer 2"** button — and the panel will scroll while the top stays put.
+
+### Wave 2 Phase 2 — the panel now shows everything
+
+The node panel got its lower half. Below the title/date/deadline/tags, it now shows:
+
+- **The email** — who it's from and when, the first few lines, and a **"View full
+  email →"** link that opens the original thread in Gmail. (Hidden for nodes you
+  made by hand, which have no email.)
+- **Notes** — every note on that node, in the same yellow sticky style. Click one
+  to edit it, or hit **+** to add. Changes show up on the overview straight away
+  and in Layer 2 next time you open it.
+- **Context** — every context/information bubble on that node. Click to edit (you
+  can switch between Context and Information), or **+** to add a new one.
+
+The top part (title, date, deadline, tags) **stays put** while the lower part
+**scrolls**, so long notes/emails never push the important bits off screen.
+
+At the very bottom: **Delete node** on the left (with a confirm), and a big
+**"Open in Layer 2 →"** button on the right that jumps straight to that project's
+detailed view.
+
+### Wave 2 Phase 3 — the "+" add menu, redesigned
+
+Clicking **+** on a project row now opens a tidy little popover right where you
+clicked (instead of a box in the middle of the screen). It matches the new node
+panel's look.
+
+- Header: "Add to <project>" with "What would you like to add?" and an × to close.
+- Three cards, each with a matching icon:
+  - **Node** — a square outline (like the squares on the timeline). "A past event, up to today."
+  - **Ambition** — a circle outline (like the ambition dots). "Something planned, in the future."
+  - **Note** — a note icon on a soft yellow card. "A sticky reminder."
+- All three still create exactly what they did before.
+- Bottom-right there's a small **Set deadline** link (calendar icon). Click it to
+  pick a date — this sets a deadline for the **whole project**. Once set, the link
+  shows the date (e.g. "Deadline · 29 May"); open it again to change or clear it.
+
+Close it with × or by clicking anywhere outside.
+
+### Layer 2 — nodes are now resizable too
+
+You could already drag the main nodes around in Layer 2; now you can also **resize**
+them. Hover a node and a small handle appears at its bottom-left — drag it to make
+the node bigger or smaller. The node stays centered where it is while it grows.
+
+Both moving and resizing only affect **Layer 2** — they never change where a node
+sits or how big it is on the overview (Layer 1). The only thing that crosses over
+is **renaming**: change a node's title and the new title shows in both layers.
+
+(One-time setup: run `supabase/node-size.sql` in the Supabase SQL editor so the
+sizes are remembered between visits. Until then you can resize, but it won't be
+saved after a reload.)
+
+### Layer 2 — notes are now draggable + resizable
+
+The yellow notes shown in Layer 2 can now be **moved** (drag the card) and
+**resized** (drag the small handle at the bottom-right to make them wider/narrower).
+This is Layer-2-only: rearranging or resizing a note here never changes where it
+sits on the overview (Layer 1). Editing a note's *text* still happens on the
+overview / in the node panel and shows in both places.
+
+(One-time setup: run `supabase/note-layout.sql` so note positions/sizes are saved
+between visits.)

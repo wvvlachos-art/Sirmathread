@@ -140,6 +140,18 @@ export async function deleteAmbition(id: string): Promise<{ error?: string }> {
   return {};
 }
 
+// Set / clear a PROJECT-level deadline (Wave 2 Phase 3 — set from the Add
+// popover). Stored on projects.deadline (+ deadline_set_at). null clears it.
+export async function setProjectDeadline(projectId: string, date: string | null): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const patch = date
+    ? { deadline: date, deadline_set_at: new Date().toISOString() }
+    : { deadline: null, deadline_set_at: null };
+  const { error } = await supabase.from("projects").update(patch).eq("id", projectId);
+  if (error) return { error: error.message };
+  return {};
+}
+
 // Set / clear a node's deadline; the countdown runs from now → the date.
 export async function setNodeDeadline(id: string, date: string): Promise<{ error?: string }> {
   if (!date) return { error: "Date is required." };
@@ -587,6 +599,86 @@ export async function deleteNote(id: string): Promise<{ error?: string }> {
   const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) return { error: error.message };
   return {};
+}
+
+// Persist a note's Layer-2-only position/size (columns from note-layout.sql).
+// Does NOT touch the Layer-1 x/y. A missing-column error is swallowed so it's an
+// in-session no-op until the migration runs.
+function noteColMissing(error: { code?: string; message?: string }): boolean {
+  return error.code === "PGRST204" || error.code === "42703" || /could not find|does not exist/i.test(error.message ?? "");
+}
+export async function updateNoteLayout(
+  id: string,
+  fields: { x?: number; y?: number; w?: number }
+): Promise<{ error?: string }> {
+  const patch: { l2_x?: number; l2_y?: number; l2_w?: number } = {};
+  if (fields.x !== undefined) patch.l2_x = fields.x;
+  if (fields.y !== undefined) patch.l2_y = fields.y;
+  if (fields.w !== undefined) patch.l2_w = Math.round(fields.w);
+  if (Object.keys(patch).length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("notes").update(patch).eq("id", id);
+  if (error) return noteColMissing(error) ? {} : { error: error.message };
+  return {};
+}
+
+// On-demand content for the Layer 1 node panel (Wave 2): the underlying email
+// excerpt + all notes + all context bubbles attached to a node. Fetched when the
+// panel opens rather than bloating the main /layer1 query. RLS scopes all reads.
+export async function getNodeDetail(nodeId: string): Promise<{
+  email: { from: string; snippet: string; dateSent: string | null; threadUrl: string | null } | null;
+  notes: { id: string; body: string }[];
+  contexts: { id: string; content: string; kind: "context" | "information"; title: string | null }[];
+  error?: string;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { email: null, notes: [], contexts: [], error: "Not signed in." };
+
+  const { data: node } = await supabase
+    .from("nodes")
+    .select("emails(from_addr, body_text, date_sent, gmail_thread_id)")
+    .eq("id", nodeId)
+    .maybeSingle();
+  const em = (node as { emails: { from_addr: string | null; body_text: string | null; date_sent: string | null; gmail_thread_id: string | null } | null } | null)?.emails ?? null;
+  const email = em
+    ? {
+        from: em.from_addr ?? "Unknown sender",
+        snippet: (em.body_text ?? "")
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(0, 3)
+          .join("\n"),
+        dateSent: em.date_sent,
+        // "all" mailbox is the safest deep-link; opens the thread in Gmail.
+        threadUrl: em.gmail_thread_id ? `https://mail.google.com/mail/u/0/#all/${em.gmail_thread_id}` : null,
+      }
+    : null;
+
+  const { data: noteRows } = await supabase
+    .from("notes")
+    .select("id, body")
+    .eq("node_id", nodeId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true });
+  const notes = ((noteRows ?? []) as { id: string; body: string | null }[]).map((n) => ({ id: n.id, body: n.body ?? "" }));
+
+  const { data: ctxRows } = await supabase
+    .from("bubbles")
+    .select("id, content, bubble_type, title")
+    .eq("node_id", nodeId)
+    .order("created_at", { ascending: true });
+  const contexts = ((ctxRows ?? []) as { id: string; content: string | null; bubble_type: string | null; title: string | null }[]).map((b) => ({
+    id: b.id,
+    content: b.content ?? "",
+    kind: b.bubble_type === "information" ? ("information" as const) : ("context" as const),
+    title: b.title,
+  }));
+
+  return { email, notes, contexts };
 }
 
 // Mark an Ambition done / not-done.

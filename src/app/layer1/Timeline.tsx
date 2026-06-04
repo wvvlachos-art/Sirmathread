@@ -18,12 +18,16 @@ import {
   setProjectSpineColor,
   setNodeDeadline,
   clearNodeDeadline,
+  setProjectDeadline,
   setNodeDone,
   createNote,
   updateNotePosition,
   updateNoteBody,
   deleteNote,
+  getNodeDetail,
 } from "./actions";
+import { createBubble, updateBubble, deleteBubble } from "../project/[id]/actions";
+import Link from "next/link";
 import MiniCalendar from "./MiniCalendar";
 import { useWand } from "./wand";
 import {
@@ -90,6 +94,7 @@ type Lane = {
   lastActivityAt: string | null;
   archived: boolean;
   inactive: boolean;
+  deadline: string | null;
   nodes: LaneNode[];
   ambitions: Ambition[];
   tags: string[];
@@ -479,10 +484,23 @@ export default function Timeline({
   const [nodeMenu, setNodeMenu] = useState<
     { id: string; label: string; tags: string[]; deadline: string | null; done: boolean; origin: string; dateIso: string } | null
   >(null);
-  // Inline title/date editing inside the node menu.
+  // Inline title/date editing inside the node panel.
   const [editLabel, setEditLabel] = useState("");
   const [editDate, setEditDate] = useState(todayIso());
   const [editDateOpen, setEditDateOpen] = useState(false);
+  const [titleErr, setTitleErr] = useState<string | null>(null);
+  const [confirmDeleteNode, setConfirmDeleteNode] = useState(false);
+  const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
+  // Wave 2 — on-demand node content (email excerpt + notes + contexts).
+  type NodeDetail = {
+    email: { from: string; snippet: string; dateSent: string | null; threadUrl: string | null } | null;
+    notes: { id: string; body: string }[];
+    contexts: { id: string; content: string; kind: "context" | "information"; title: string | null }[];
+  };
+  const [nodeDetail, setNodeDetail] = useState<NodeDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [noteEdit, setNoteEdit] = useState<{ id: string | "new"; text: string } | null>(null);
+  const [ctxEdit, setCtxEdit] = useState<{ id: string | "new"; text: string; kind: "context" | "information" } | null>(null);
   // Ambition menu (open / edit / tag / delete a single ambition).
   const [ambMenu, setAmbMenu] = useState<
     { id: string; title: string; t: number; isDeadline: boolean; done: boolean; tags: string[] } | null
@@ -514,8 +532,9 @@ export default function Timeline({
   const [nodeCalDate, setNodeCalDate] = useState(todayIso());
   const [addAsDeadline, setAddAsDeadline] = useState(false);
   const [addChoice, setAddChoice] = useState<
-    { projectId: string; projectName: string; minDate: string; anchorNodeId: string | null; anchorT: number } | null
+    { projectId: string; projectName: string; minDate: string; anchorNodeId: string | null; anchorT: number; x: number; y: number } | null
   >(null);
+  const [addDeadlineOpen, setAddDeadlineOpen] = useState(false);
   const [noteCompose, setNoteCompose] = useState<
     { projectId: string; anchorNodeId: string | null; anchorT: number } | null
   >(null);
@@ -799,34 +818,53 @@ export default function Timeline({
     }
     setNodeCalOpen(false);
     setEditDateOpen(false);
+    setTitleErr(null);
+    setConfirmDeleteNode(false);
+    setTagPopoverOpen(false);
     setEditLabel(n.label);
     setEditDate(isoFromMs(n.t));
     setNodeMenu({ id: n.id, label: n.label, tags: nodeTagsOf(n), deadline: n.deadline, done: n.done, origin: n.origin, dateIso: isoFromMs(n.t) });
   };
-  const saveNodeEdits = async () => {
+  // Panel title save — on blur / Enter. Reverts the field + shows an inline
+  // error on failure; keeps the panel open on success.
+  const panelSaveTitle = async () => {
     if (!nodeMenu) return;
-    const fields: { label?: string; date?: string } = {};
-    if (editLabel.trim() !== nodeMenu.label) fields.label = editLabel;
-    if (nodeMenu.origin === "manual" && editDate !== nodeMenu.dateIso) fields.date = editDate;
-    if (Object.keys(fields).length === 0) {
-      setNodeMenu(null);
+    const next = editLabel.trim();
+    if (!next || next === nodeMenu.label) {
+      setEditLabel(nodeMenu.label);
+      setTitleErr(null);
       return;
     }
     setBusy(true);
-    const res = await updateNode(nodeMenu.id, fields);
+    const res = await updateNode(nodeMenu.id, { label: next });
     setBusy(false);
     if (res.error) {
+      setEditLabel(nodeMenu.label);
+      setTitleErr(res.error);
+      return;
+    }
+    setTitleErr(null);
+    const lane = laneOfNode(nodeMenu.id);
+    if (lane) updateNodeIn(lane.id, nodeMenu.id, { label: next });
+    setNodeMenu({ ...nodeMenu, label: next });
+  };
+  // Panel date save — manual nodes only (gmail dates follow the email).
+  const panelSaveDate = async (iso: string) => {
+    if (!nodeMenu) return;
+    setEditDate(iso);
+    setEditDateOpen(false);
+    if (iso === nodeMenu.dateIso) return;
+    setBusy(true);
+    const res = await updateNode(nodeMenu.id, { date: iso });
+    setBusy(false);
+    if (res.error) {
+      setEditDate(nodeMenu.dateIso);
       alert(res.error);
       return;
     }
     const lane = laneOfNode(nodeMenu.id);
-    if (lane) {
-      const patch: Partial<LaneNode> = {};
-      if (fields.label) patch.label = fields.label.trim();
-      if (fields.date) patch.t = new Date(`${fields.date}T09:00:00Z`).getTime();
-      updateNodeIn(lane.id, nodeMenu.id, patch);
-    }
-    setNodeMenu(null);
+    if (lane) updateNodeIn(lane.id, nodeMenu.id, { t: new Date(`${iso}T09:00:00Z`).getTime() });
+    setNodeMenu({ ...nodeMenu, dateIso: iso });
   };
 
   // Open an ambition: stamp it if armed, otherwise show its menu.
@@ -908,7 +946,7 @@ export default function Timeline({
       // Stage starts at 0 because deadline_set_at = now: no time has elapsed.
       updateNodeIn(lane.id, nodeMenu.id, { deadline: nodeCalDate, done: false, stage: 0 });
     }
-    setNodeMenu(null);
+    setNodeMenu({ ...nodeMenu, deadline: nodeCalDate, done: false }); // keep panel open
     setNodeCalOpen(false);
   };
   const removeNodeDeadline = async () => {
@@ -922,7 +960,7 @@ export default function Timeline({
       return;
     }
     if (lane) updateNodeIn(lane.id, nodeMenu.id, { deadline: null, done: false, stage: 0 });
-    setNodeMenu(null);
+    setNodeMenu({ ...nodeMenu, deadline: null, done: false }); // keep panel open
   };
   const completeNode = async (done: boolean) => {
     if (!nodeMenu) return;
@@ -935,7 +973,7 @@ export default function Timeline({
       return;
     }
     if (lane) updateNodeIn(lane.id, nodeMenu.id, { done });
-    setNodeMenu(null);
+    setNodeMenu({ ...nodeMenu, done }); // keep panel open
   };
 
   const noteOf = (nt: Note) => noteOverride[nt.id] ?? { x: nt.x, y: nt.y };
@@ -974,6 +1012,107 @@ export default function Timeline({
     if (lane) removeNoteFromLane(lane.id, id);
     const res = await deleteNote(id);
     if (res?.error) alert("Could not delete: " + res.error);
+  };
+
+  // ── Wave 2 node panel: load the node's content (email + notes + contexts) on open ──
+  useEffect(() => {
+    if (!nodeMenu) {
+      setNodeDetail(null);
+      return;
+    }
+    const id = nodeMenu.id;
+    let cancelled = false;
+    setNodeDetail(null);
+    setNoteEdit(null);
+    setCtxEdit(null);
+    setDetailLoading(true);
+    getNodeDetail(id).then((d) => {
+      if (cancelled) return;
+      setDetailLoading(false);
+      setNodeDetail({ email: d.email, notes: d.notes, contexts: d.contexts });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeMenu?.id]);
+
+  // Notes inside the panel — reuse the Layer-1 note actions + keep the canvas in sync.
+  const savePanelNote = async () => {
+    if (!noteEdit || !nodeMenu) return;
+    const text = noteEdit.text.trim();
+    const lane = laneOfNode(nodeMenu.id);
+    if (!text) {
+      setNoteEdit(null);
+      return;
+    }
+    setBusy(true);
+    if (noteEdit.id === "new") {
+      const t = lane?.nodes.find((n) => n.id === nodeMenu.id)?.t ?? Date.now();
+      const res = await createNote(lane?.id ?? "", nodeMenu.id, text, t, -60);
+      setBusy(false);
+      if (res.error || !res.id) return void alert("Could not add note: " + (res.error ?? "unknown error"));
+      setNodeDetail((d) => (d ? { ...d, notes: [...d.notes, { id: res.id!, body: text }] } : d));
+      if (lane) addNoteToLane(lane.id, { id: res.id, body: text, x: t, y: -60, anchorT: t });
+    } else {
+      const res = await updateNoteBody(noteEdit.id, text);
+      setBusy(false);
+      if (res.error) return void alert("Could not save: " + res.error);
+      const nid = noteEdit.id;
+      setNodeDetail((d) => (d ? { ...d, notes: d.notes.map((n) => (n.id === nid ? { ...n, body: text } : n)) } : d));
+      if (lane) updateNoteIn(lane.id, nid, { body: text });
+    }
+    setNoteEdit(null);
+  };
+  const deletePanelNote = async (id: string) => {
+    const lane = nodeMenu ? laneOfNode(nodeMenu.id) : null;
+    setNodeDetail((d) => (d ? { ...d, notes: d.notes.filter((n) => n.id !== id) } : d));
+    if (lane) removeNoteFromLane(lane.id, id);
+    setNoteEdit(null);
+    const res = await deleteNote(id);
+    if (res?.error) alert("Could not delete: " + res.error);
+  };
+
+  // Context bubbles inside the panel — reuse the Layer-2 bubble actions.
+  const savePanelCtx = async () => {
+    if (!ctxEdit || !nodeMenu) return;
+    const text = ctxEdit.text.trim();
+    if (!text) {
+      setCtxEdit(null);
+      return;
+    }
+    const lane = laneOfNode(nodeMenu.id);
+    setBusy(true);
+    if (ctxEdit.id === "new") {
+      const res = await createBubble(lane?.id ?? "", nodeMenu.id, text, "above", nodeMenu.label, lane?.name ?? "", ctxEdit.kind);
+      setBusy(false);
+      if (res.error || !res.id) return void alert("Could not add context: " + (res.error ?? "unknown error"));
+      setNodeDetail((d) => (d ? { ...d, contexts: [...d.contexts, { id: res.id!, content: text, kind: ctxEdit.kind, title: null }] } : d));
+    } else {
+      const res = await updateBubble(ctxEdit.id, text);
+      setBusy(false);
+      if (res.error) return void alert("Could not save: " + res.error);
+      const cid = ctxEdit.id;
+      setNodeDetail((d) => (d ? { ...d, contexts: d.contexts.map((c) => (c.id === cid ? { ...c, content: text } : c)) } : d));
+    }
+    setCtxEdit(null);
+  };
+  const deletePanelCtx = async (id: string) => {
+    setNodeDetail((d) => (d ? { ...d, contexts: d.contexts.filter((c) => c.id !== id) } : d));
+    setCtxEdit(null);
+    const res = await deleteBubble(id);
+    if (res?.error) alert("Could not delete: " + res.error);
+  };
+
+  // Project-level deadline (Add popover footer). Optimistic; reverts on error.
+  const saveProjectDeadline = async (projectId: string, date: string | null) => {
+    const prev = lanes.find((l) => l.id === projectId)?.deadline ?? null;
+    patchLane(projectId, (l) => ({ ...l, deadline: date }));
+    const res = await setProjectDeadline(projectId, date);
+    if (res?.error) {
+      patchLane(projectId, (l) => ({ ...l, deadline: prev }));
+      alert("Could not update deadline: " + res.error);
+    }
   };
   const doArchive = async () => {
     if (!projMenu) return;
@@ -1824,7 +1963,10 @@ export default function Timeline({
                     {/* "+" to add a node/ambition */}
                     <g
                       className="cursor-pointer"
-                      onClick={() => setAddChoice({ projectId: p.id, projectName: p.name, minDate, anchorNodeId, anchorT })}
+                      onClick={(e) => {
+                        setAddDeadlineOpen(false);
+                        setAddChoice({ projectId: p.id, projectName: p.name, minDate, anchorNodeId, anchorT, x: e.clientX, y: e.clientY });
+                      }}
                     >
                       <circle cx={plusX} cy={plusY} r={10} fill={PAPER_SURFACE} stroke={OXBLOOD} strokeWidth={1.25} />
                       <text x={plusX} y={plusY + 4} fill={OXBLOOD} fontSize={14} textAnchor="middle">
@@ -2514,53 +2656,145 @@ export default function Timeline({
       )}
 
       {/* Choose what to add: note or ambition */}
-      {addChoice && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setAddChoice(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-lg border border-hairline bg-paper-surface p-5 text-ink shadow-xl">
-            <h2 className="brand-serif mb-1 text-lg text-oxblood">Add to {addChoice.projectName}</h2>
-            <p className="mb-4 text-sm text-muted">What would you like to add?</p>
-            <div className="flex flex-col gap-2">
-              {(addChoice.minDate === "" || addChoice.minDate < todayIso()) && (
-                <button
-                  onClick={() => {
-                    const c = addChoice;
-                    setAddChoice(null);
-                    openAdd(c.projectId, c.projectName, c.minDate, "node");
-                  }}
-                  className="rounded-md border border-hairline bg-paper px-4 py-3 text-left text-sm font-medium text-ink hover:bg-paper-surface"
-                >
-                  ▢ Node <span className="font-normal text-muted">— a past event (up to today)</span>
-                </button>
-              )}
-              <button
-                onClick={() => {
-                  const c = addChoice;
-                  setAddChoice(null);
-                  openAdd(c.projectId, c.projectName, c.minDate, "ambition");
-                }}
-                className="rounded-md border border-oxblood bg-paper px-4 py-3 text-left text-sm font-medium text-oxblood hover:bg-paper-surface"
+      {addChoice &&
+        (() => {
+          const proj = lanes.find((l) => l.id === addChoice.projectId);
+          const dl = proj?.deadline ?? null;
+          const PW = 288;
+          const left = Math.max(8, Math.min(addChoice.x, window.innerWidth - PW - 8));
+          const top = Math.max(8, Math.min(addChoice.y, window.innerHeight - 360));
+          const fmtShort = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+          const close = () => {
+            setAddChoice(null);
+            setAddDeadlineOpen(false);
+          };
+          return (
+            <div className="fixed inset-0 z-40" onClick={close}>
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="fixed rounded-lg border border-hairline bg-paper-surface p-3 text-ink shadow-2xl"
+                style={{ left, top, width: PW }}
               >
-                ◯ Ambition <span className="font-normal text-muted">— something planned (future)</span>
-              </button>
-              <button
-                onClick={() => {
-                  setNoteCompose({
-                    projectId: addChoice.projectId,
-                    anchorNodeId: addChoice.anchorNodeId,
-                    anchorT: addChoice.anchorT,
-                  });
-                  setNoteBody("");
-                  setAddChoice(null);
-                }}
-                className="rounded-md px-4 py-3 text-left text-sm font-medium text-ink"
-                style={{ background: NOTE_FILL, border: `1px solid ${NOTE_BORDER}` }}
-              >
-                📝 Note <span className="font-normal text-muted">— a sticky reminder</span>
-              </button>
+                <div className="mb-2.5 flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium text-ink">Add to {addChoice.projectName}</div>
+                    <div className="text-xs text-muted">What would you like to add?</div>
+                  </div>
+                  <button onClick={close} title="Close" className="-mr-1 -mt-1 shrink-0 rounded p-1 text-muted hover:bg-paper hover:text-ink">
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  {(addChoice.minDate === "" || addChoice.minDate < todayIso()) && (
+                    <button
+                      onClick={() => {
+                        const c = addChoice;
+                        close();
+                        openAdd(c.projectId, c.projectName, c.minDate, "node");
+                      }}
+                      className="flex w-full items-center gap-3 rounded-md border border-hairline bg-paper px-3 py-2.5 text-left hover:bg-paper-surface"
+                    >
+                      <svg width={18} height={18} viewBox="0 0 24 24" className="shrink-0 text-ink">
+                        <rect x={3} y={3} width={18} height={18} rx={3} fill="none" stroke="currentColor" strokeWidth={1.5} />
+                      </svg>
+                      <span className="flex flex-col">
+                        <span className="text-sm font-medium text-ink">Node</span>
+                        <span className="text-xs text-muted">A past event, up to today</span>
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      const c = addChoice;
+                      close();
+                      openAdd(c.projectId, c.projectName, c.minDate, "ambition");
+                    }}
+                    className="flex w-full items-center gap-3 rounded-md border border-hairline bg-paper px-3 py-2.5 text-left hover:bg-paper-surface"
+                  >
+                    <svg width={18} height={18} viewBox="0 0 24 24" className="shrink-0 text-ink">
+                      <circle cx={12} cy={12} r={9} fill="none" stroke="currentColor" strokeWidth={1.5} />
+                    </svg>
+                    <span className="flex flex-col">
+                      <span className="text-sm font-medium text-ink">Ambition</span>
+                      <span className="text-xs text-muted">Something planned, in the future</span>
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNoteCompose({ projectId: addChoice.projectId, anchorNodeId: addChoice.anchorNodeId, anchorT: addChoice.anchorT });
+                      setNoteBody("");
+                      close();
+                    }}
+                    className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition hover:brightness-95"
+                    style={{ background: NOTE_FILL, border: `1px solid ${NOTE_BORDER}` }}
+                  >
+                    <svg
+                      width={18}
+                      height={18}
+                      viewBox="0 0 24 24"
+                      className="shrink-0"
+                      style={{ color: "#8a6d1e" }}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M13 20l7 -7" />
+                      <path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v14a2 2 0 0 0 2 2h8" />
+                    </svg>
+                    <span className="flex flex-col">
+                      <span className="text-sm font-medium" style={{ color: "#7a5c12" }}>
+                        Note
+                      </span>
+                      <span className="text-xs" style={{ color: "#9a7c3a" }}>
+                        A sticky reminder
+                      </span>
+                    </span>
+                  </button>
+                </div>
+
+                {/* footer: project-level deadline */}
+                <div className="mt-2.5 flex justify-end border-t border-hairline pt-2">
+                  <button onClick={() => setAddDeadlineOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink">
+                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12.5 21h-6.5a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v3.5" />
+                      <path d="M16 3v4" />
+                      <path d="M8 3v4" />
+                      <path d="M4 11h16" />
+                      <path d="M16 19h6" />
+                      <path d="M19 16v6" />
+                    </svg>
+                    {dl ? `Deadline · ${fmtShort(dl)}` : "Set deadline"}
+                  </button>
+                </div>
+                {addDeadlineOpen && (
+                  <div className="mt-2 border-t border-hairline pt-2">
+                    <MiniCalendar
+                      value={dl ?? todayIso()}
+                      onChange={(d) => {
+                        saveProjectDeadline(addChoice.projectId, d);
+                        setAddDeadlineOpen(false);
+                      }}
+                    />
+                    {dl && (
+                      <button
+                        onClick={() => {
+                          saveProjectDeadline(addChoice.projectId, null);
+                          setAddDeadlineOpen(false);
+                        }}
+                        className="mt-1 text-xs text-oxblood hover:underline"
+                      >
+                        Clear deadline
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       {/* Compose a note */}
       {noteCompose && (
@@ -2643,127 +2877,369 @@ export default function Timeline({
       )}
 
       {/* Node actions */}
-      {nodeMenu && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setNodeMenu(null)}>
-          <div onClick={(e) => e.stopPropagation()} className={card}>
-            <h2 className="brand-serif mb-3 text-lg text-oxblood">Node</h2>
-
-            <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Title</label>
-            <input
-              value={editLabel}
-              onChange={(e) => setEditLabel(e.target.value)}
-              className="mb-3 w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-oxblood"
-            />
-            {nodeMenu.origin === "manual" ? (
-              <div className="mb-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-ink">Date: {fmtEU(editDate)}</span>
-                  <button onClick={() => setEditDateOpen((v) => !v)} className="text-xs text-muted hover:text-ink">
-                    {editDateOpen ? "Hide" : "Change"}
-                  </button>
-                </div>
-                {editDateOpen && (
-                  <div className="mt-2">
-                    <MiniCalendar value={editDate} onChange={setEditDate} maxDate={todayIso()} />
+      {nodeMenu &&
+        (() => {
+          const lane = laneOfNode(nodeMenu.id);
+          const projectName = lane?.name ?? "";
+          const cur = lane?.nodes.find((n) => n.id === nodeMenu.id)?.tags ?? nodeMenu.tags;
+          const tagInfo: Record<string, { value: string; color: string | null }> = {};
+          for (const c of categories) for (const v of c.values) tagInfo[v.id] = { value: v.value, color: v.color };
+          const subtitleDate = nodeMenu.origin === "manual" ? editDate : nodeMenu.dateIso;
+          return (
+            <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30" onClick={() => !busy && setNodeMenu(null)}>
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="mr-3 w-[400px] max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-lg border border-hairline bg-paper-surface text-ink shadow-2xl"
+                style={{ maxHeight: "min(720px, 85vh)" }}
+              >
+                {/* ── sticky header region (metadata) ── */}
+                <div className="sticky top-0 z-10 border-b border-hairline bg-paper-surface p-4">
+                  <div className="mb-1 flex items-start gap-2">
+                    <input
+                      value={editLabel}
+                      onChange={(e) => setEditLabel(e.target.value)}
+                      onBlur={panelSaveTitle}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      className="brand-serif min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-lg text-oxblood outline-none hover:border-hairline focus:border-oxblood focus:bg-paper"
+                    />
+                    <button onClick={() => setNodeMenu(null)} title="Close" className="shrink-0 rounded p-1 text-muted hover:bg-paper hover:text-ink">
+                      ✕
+                    </button>
                   </div>
-                )}
-              </div>
-            ) : (
-              <p className="mb-3 text-xs text-muted">Date comes from the email and isn&apos;t editable here.</p>
-            )}
-            <button onClick={saveNodeEdits} disabled={busy} className={`${primary} mb-5 w-full`}>
-              {busy ? "Saving…" : "Save title / date"}
-            </button>
+                  {titleErr && <p className="mb-1 px-1 text-xs text-oxblood">{titleErr}</p>}
 
-            <p className="mb-2 text-xs uppercase tracking-wide text-muted">Deadline</p>
-            <div className="mb-4">
-              {nodeMenu.deadline ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-sm text-ink">
-                    {nodeMenu.done ? "Completed ✓" : `Due ${fmtEU(nodeMenu.deadline)}`}
-                  </p>
-                  <div className="flex gap-2">
+                  <div className="mb-3 flex items-center gap-1 px-1 text-xs text-muted">
+                    {nodeMenu.origin === "manual" ? (
+                      <button onClick={() => setEditDateOpen((v) => !v)} className="hover:text-ink hover:underline">
+                        {fmtEU(subtitleDate)}
+                      </button>
+                    ) : (
+                      <span title="Date comes from the email">{fmtEU(subtitleDate)}</span>
+                    )}
+                    <span>·</span>
+                    <span className="truncate">{projectName}</span>
+                  </div>
+                  {editDateOpen && nodeMenu.origin === "manual" && (
+                    <div className="mb-3">
+                      <MiniCalendar value={editDate} onChange={panelSaveDate} maxDate={todayIso()} />
+                    </div>
+                  )}
+
+                  {/* status chips */}
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    {nodeMenu.deadline ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-paper px-2.5 py-1 text-xs text-ink">
+                        <button
+                          onClick={() => {
+                            setNodeCalDate(nodeMenu.deadline!);
+                            setNodeCalOpen((v) => !v);
+                          }}
+                          className="hover:text-oxblood"
+                        >
+                          Due {fmtEU(nodeMenu.deadline)}
+                        </button>
+                        <button onClick={removeNodeDeadline} disabled={busy} title="Clear deadline" className="text-muted hover:text-oxblood">
+                          ✕
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setNodeCalDate(todayIso());
+                          setNodeCalOpen((v) => !v);
+                        }}
+                        className="rounded-full border border-dashed border-hairline px-2.5 py-1 text-xs text-muted hover:border-oxblood hover:text-oxblood"
+                      >
+                        Set deadline
+                      </button>
+                    )}
                     <button
                       onClick={() => completeNode(!nodeMenu.done)}
                       disabled={busy}
-                      className={nodeMenu.done ? ghost : primary}
+                      className="rounded-full border px-2.5 py-1 text-xs"
+                      style={
+                        nodeMenu.done
+                          ? { background: "#e6efe0", borderColor: "#8a9a72", color: "#3f5536" }
+                          : { background: "var(--color-paper, #e7dcc4)", borderColor: "#cbbb96", color: "#8f7f5b" }
+                      }
                     >
-                      {nodeMenu.done ? "Reopen" : "✓ Complete"}
-                    </button>
-                    <button onClick={removeNodeDeadline} disabled={busy} className={ghost}>
-                      Clear deadline
+                      {nodeMenu.done ? "✓ Complete" : "Incomplete"}
                     </button>
                   </div>
-                </div>
-              ) : nodeCalOpen ? (
-                <div>
-                  <MiniCalendar value={nodeCalDate} onChange={setNodeCalDate} />
-                  <p className="mt-1 text-xs text-muted">Due {fmtEU(nodeCalDate)}</p>
-                  <div className="mt-2 flex gap-2">
-                    <button onClick={() => setNodeCalOpen(false)} disabled={busy} className={ghost}>
-                      Cancel
-                    </button>
-                    <button onClick={saveNodeDeadline} disabled={busy} className={primary}>
-                      Set deadline
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => {
-                    setNodeCalDate(todayIso());
-                    setNodeCalOpen(true);
-                  }}
-                  className={ghost}
-                >
-                  Set deadline
-                </button>
-              )}
-            </div>
 
-            <p className="mb-2 text-xs uppercase tracking-wide text-muted">Tags</p>
-            <div className="mb-5">
-              {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
-              {categories.map((c) => (
-                <div key={c.id} className="mb-2">
-                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {c.values.map((v) => {
-                      const cur =
-                        laneOfNode(nodeMenu.id)?.nodes.find((n) => n.id === nodeMenu.id)?.tags ??
-                        nodeMenu.tags;
-                      const on = cur.includes(v.id);
+                  {/* deadline date picker (set / change) */}
+                  {nodeCalOpen && (
+                    <div className="mb-3 rounded-md border border-hairline bg-paper p-2">
+                      <MiniCalendar value={nodeCalDate} onChange={setNodeCalDate} />
+                      <p className="mt-1 text-xs text-muted">Due {fmtEU(nodeCalDate)}</p>
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={() => setNodeCalOpen(false)} disabled={busy} className={ghost}>
+                          Cancel
+                        </button>
+                        <button onClick={saveNodeDeadline} disabled={busy} className={primary}>
+                          {nodeMenu.deadline ? "Update" : "Set deadline"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* tags: applied pills + "+ Tag" category popover */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {cur.map((id) => {
+                      const info = tagInfo[id];
+                      if (!info) return null;
                       return (
-                        <button
-                          key={v.id}
-                          onClick={() => applyNodeTag(nodeMenu.id, v.id, cur)}
-                          className="rounded-full px-2 py-0.5 text-xs"
-                          style={{
-                            background: on ? v.color : "transparent",
-                            color: on ? "#fff" : INK,
-                            border: `1px solid ${v.color}`,
-                          }}
+                        <span
+                          key={id}
+                          className="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+                          style={{ background: info.color ?? "#a1a1aa", color: "#fff" }}
                         >
-                          {v.value}
+                          {info.value}
+                          <button
+                            onClick={() => applyNodeTag(nodeMenu.id, id, cur)}
+                            title="Remove tag"
+                            className="-mr-0.5 opacity-60 transition hover:opacity-100 group-hover:opacity-100"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      );
+                    })}
+                    <div className="relative">
+                      <button
+                        onClick={() => setTagPopoverOpen((v) => !v)}
+                        className="rounded-full border border-dashed border-hairline px-2 py-0.5 text-xs text-muted hover:border-oxblood hover:text-oxblood"
+                      >
+                        + Tag
+                      </button>
+                      {tagPopoverOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setTagPopoverOpen(false)} />
+                          <div className="absolute left-1/2 top-full z-20 mt-1 max-h-64 w-56 -translate-x-1/2 overflow-auto rounded-md border border-hairline bg-paper-surface p-2 shadow-lg">
+                            {categories.length === 0 && <p className="text-xs text-muted">No tags yet.</p>}
+                            {categories.map((c) => (
+                              <div key={c.id} className="mb-2 last:mb-0">
+                                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{c.name}</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {c.values.map((v) => {
+                                    const on = cur.includes(v.id);
+                                    return (
+                                      <button
+                                        key={v.id}
+                                        onClick={() => applyNodeTag(nodeMenu.id, v.id, cur)}
+                                        className="rounded-full px-2 py-0.5 text-xs"
+                                        style={{ background: on ? v.color ?? "#a1a1aa" : "transparent", color: on ? "#fff" : INK, border: `1px solid ${v.color ?? "#a1a1aa"}` }}
+                                      >
+                                        {on ? "✓ " : ""}
+                                        {v.value}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── body region: email + notes + context ── */}
+                {detailLoading && <div className="px-4 py-4 text-xs text-muted">Loading…</div>}
+
+                {/* email excerpt (hidden for manual nodes with no email) */}
+                {nodeDetail?.email && (
+                  <div className="border-b border-hairline px-4 py-3">
+                    <div className="mb-1 flex items-center gap-1.5 text-xs text-muted">
+                      <svg width={13} height={13} viewBox="0 0 24 24" className="shrink-0">
+                        <path d="M3 6 h18 v12 h-18 z M3 6 l9 7 l9 -7" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" />
+                      </svg>
+                      <span className="truncate">From {nodeDetail.email.from}</span>
+                      <span>·</span>
+                      <span className="shrink-0">{relTimeAgo(nodeDetail.email.dateSent, Date.now())}</span>
+                    </div>
+                    {nodeDetail.email.snippet && (
+                      <p className="whitespace-pre-line text-sm leading-snug text-ink/90">{nodeDetail.email.snippet}</p>
+                    )}
+                    {nodeDetail.email.threadUrl && (
+                      <a href={nodeDetail.email.threadUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-xs text-oxblood hover:underline">
+                        View full email →
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                {/* notes */}
+                <div className="border-b border-hairline px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-wide text-muted">Notes</span>
+                    <button onClick={() => setNoteEdit({ id: "new", text: "" })} title="Add note" className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-paper hover:text-ink">
+                      +
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {nodeDetail?.notes.map((n) =>
+                      noteEdit && noteEdit.id === n.id ? (
+                        <div key={n.id} className="rounded-md border p-2" style={{ background: NOTE_FILL, borderColor: NOTE_BORDER }}>
+                          <textarea
+                            autoFocus
+                            rows={3}
+                            value={noteEdit.text}
+                            onChange={(e) => setNoteEdit({ ...noteEdit, text: e.target.value })}
+                            className="w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-sm text-ink outline-none"
+                          />
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <button onClick={savePanelNote} disabled={busy} className="rounded bg-oxblood px-2 py-0.5 text-paper hover:bg-oxblood-dark">Save</button>
+                            <button onClick={() => setNoteEdit(null)} className="text-muted hover:text-ink">Cancel</button>
+                            <button onClick={() => deletePanelNote(n.id)} className="ml-auto text-oxblood hover:underline">Delete</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          key={n.id}
+                          onClick={() => setNoteEdit({ id: n.id, text: n.body })}
+                          className="rounded-md border px-2.5 py-1.5 text-left text-sm"
+                          style={{ background: NOTE_FILL, borderColor: NOTE_BORDER, color: INK, fontFamily: "Georgia, serif" }}
+                        >
+                          {n.body}
+                        </button>
+                      )
+                    )}
+                    {noteEdit?.id === "new" && (
+                      <div className="rounded-md border p-2" style={{ background: NOTE_FILL, borderColor: NOTE_BORDER }}>
+                        <textarea
+                          autoFocus
+                          rows={3}
+                          value={noteEdit.text}
+                          onChange={(e) => setNoteEdit({ ...noteEdit, text: e.target.value })}
+                          placeholder="New note…"
+                          className="w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-sm text-ink outline-none"
+                        />
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <button onClick={savePanelNote} disabled={busy || !noteEdit.text.trim()} className="rounded bg-oxblood px-2 py-0.5 text-paper hover:bg-oxblood-dark disabled:opacity-60">Add</button>
+                          <button onClick={() => setNoteEdit(null)} className="text-muted hover:text-ink">Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* context */}
+                <div className="border-b border-hairline px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-wide text-muted">Context</span>
+                    <button onClick={() => setCtxEdit({ id: "new", text: "", kind: "context" })} title="Add context" className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-paper hover:text-ink">
+                      +
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {nodeDetail?.contexts.map((c) => {
+                      const col = c.kind === "information" ? "#6f5a8c" : "#5a7d8c";
+                      return ctxEdit && ctxEdit.id === c.id ? (
+                        <div key={c.id} className="rounded-md border bg-paper p-2" style={{ borderColor: col }}>
+                          <div className="mb-1 flex gap-1">
+                            {(["context", "information"] as const).map((k) => (
+                              <button
+                                key={k}
+                                onClick={() => setCtxEdit({ ...ctxEdit, kind: k })}
+                                className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                                style={ctxEdit.kind === k ? { background: k === "information" ? "#6f5a8c" : "#5a7d8c", color: "#fff" } : { border: "1px solid #cbbb96", color: MUTED }}
+                              >
+                                {k}
+                              </button>
+                            ))}
+                          </div>
+                          <textarea
+                            autoFocus
+                            rows={3}
+                            value={ctxEdit.text}
+                            onChange={(e) => setCtxEdit({ ...ctxEdit, text: e.target.value })}
+                            className="w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-sm text-ink outline-none"
+                          />
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <button onClick={savePanelCtx} disabled={busy} className="rounded bg-oxblood px-2 py-0.5 text-paper hover:bg-oxblood-dark">Save</button>
+                            <button onClick={() => setCtxEdit(null)} className="text-muted hover:text-ink">Cancel</button>
+                            <button onClick={() => deletePanelCtx(c.id)} className="ml-auto text-oxblood hover:underline">Delete</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          key={c.id}
+                          onClick={() => setCtxEdit({ id: c.id, text: c.content, kind: c.kind })}
+                          className="rounded-md border-l-4 bg-paper px-2.5 py-1.5 text-left text-sm"
+                          style={{ borderColor: col, color: INK }}
+                        >
+                          <span className="block text-[9px] font-semibold uppercase tracking-wide" style={{ color: col }}>
+                            {c.kind === "information" ? "Information" : "Context"}
+                          </span>
+                          {c.content}
                         </button>
                       );
                     })}
+                    {ctxEdit?.id === "new" && (
+                      <div className="rounded-md border bg-paper p-2" style={{ borderColor: ctxEdit.kind === "information" ? "#6f5a8c" : "#5a7d8c" }}>
+                        <div className="mb-1 flex gap-1">
+                          {(["context", "information"] as const).map((k) => (
+                            <button
+                              key={k}
+                              onClick={() => setCtxEdit({ ...ctxEdit, kind: k })}
+                              className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                              style={ctxEdit.kind === k ? { background: k === "information" ? "#6f5a8c" : "#5a7d8c", color: "#fff" } : { border: "1px solid #cbbb96", color: MUTED }}
+                            >
+                              {k}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          autoFocus
+                          rows={3}
+                          value={ctxEdit.text}
+                          onChange={(e) => setCtxEdit({ ...ctxEdit, text: e.target.value })}
+                          placeholder="New context…"
+                          className="w-full resize-none rounded border border-hairline bg-paper px-1.5 py-1 text-sm text-ink outline-none"
+                        />
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <button onClick={savePanelCtx} disabled={busy || !ctxEdit.text.trim()} className="rounded bg-oxblood px-2 py-0.5 text-paper hover:bg-oxblood-dark disabled:opacity-60">Add</button>
+                          <button onClick={() => setCtxEdit(null)} className="text-muted hover:text-ink">Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
 
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setNodeMenu(null)} disabled={busy} className={ghost}>
-                Close
-              </button>
-              <button onClick={removeNode} disabled={busy} className={danger}>
-                {busy ? "Deleting…" : "Delete node"}
-              </button>
+                {/* ── footer (scrolls with the body) ── */}
+                <div className="flex items-center justify-between gap-2 p-4">
+                  {confirmDeleteNode ? (
+                    <span className="flex items-center gap-2 text-xs">
+                      <span className="text-muted">Delete this node?</span>
+                      <button onClick={removeNode} disabled={busy} className="font-medium text-oxblood hover:underline">
+                        {busy ? "Deleting…" : "Yes, delete"}
+                      </button>
+                      <button onClick={() => setConfirmDeleteNode(false)} className="text-muted hover:text-ink">
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button onClick={() => setConfirmDeleteNode(true)} disabled={busy} className="text-sm text-oxblood hover:underline">
+                      Delete node
+                    </button>
+                  )}
+                  {lane && (
+                    <Link href={`/project/${lane.id}`} className="ml-auto inline-flex items-center gap-1 rounded-md bg-oxblood px-3 py-1.5 text-sm font-medium text-paper hover:bg-oxblood-dark">
+                      Open in Layer 2 →
+                    </Link>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       {/* Ambition actions */}
       {ambMenu && (

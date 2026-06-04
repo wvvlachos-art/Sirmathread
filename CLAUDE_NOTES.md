@@ -272,17 +272,229 @@ stretches open up. Gaps > 14 days get an italic "~N weeks later" annotation. A s
 month band runs down the left (each month labelled near its first node; not
 to-scale by design — it's an orientation aid, not a ruler).
 
-**Context bubbles (`bubbles` table).** Reshaped from the old empty placeholder.
-Columns used: `organization_id` (RLS), `project_id`, `node_id`, `bubble_type`
-('context' | 'insight'), `source` ('manual' | 'ai'), `content`, `position_side`
-('above' | 'below'), `position_offset` (reserved for future drag), timestamps,
-`created_by_user_id`. RLS: read = org member, write = org owner/member (same
-pattern as other content tables). Bubbles render as margin notes (dusty-blue edge
-bar, "CONTEXT · YOU" label, italic serif, dashed connector, slight alternating
-rotation); they alternate above/below per node and stack outward. CRUD via
-`src/app/project/[id]/actions.ts`, logged as `bubble.created/.edited/.deleted`.
+**Context bubbles = draggable sub-nodes (`bubbles` table).** Reshaped from the
+old empty placeholder. Columns used: `organization_id` (RLS), `project_id`,
+`node_id`, `bubble_type` ('context' | 'insight'), `source` ('manual' | 'ai'),
+`content`, `position_side` ('above' | 'below'), `x`/`y` (legacy double-precision
+columns, now repurposed for the dragged position — stored as an OFFSET from the
+parent node centre so it survives layout/zoom changes; null = default stack
+slot), timestamps, `created_by_user_id`. **GOTCHA: the legacy `kind` column is
+still NOT NULL** (the layer2-bubbles migration added `bubble_type` alongside it
+but never dropped it) — `createBubble` MUST also set `kind: "context"` or the
+insert fails with a "null value in column kind" error. RLS: read = org member,
+write = org owner/member.
+Render (redesigned 2026-06-04 per William — old faint italic "margin notes" were
+too faint / didn't read as attached / weren't draggable): each bubble is a
+**visible sub-node card** (rounded, 1.5px dusty-blue `MANUAL_EDGE` border,
+paper-surface bg, shadow; solid dusty-blue header strip with a tiny square glyph
++ "CONTEXT · YOU"; body in INK serif, not faint), centre-anchored, connected to
+its parent node by a **solid** connector with a filled socket dot on the node
+edge (computed via the node→card vector). Cards are **draggable** (pointer-
+capture; `dist>4` = drag vs click, mirroring Layer 1 notes): optimistic
+`bubblePos` override + `bubblePosRef`, persisted on pointer-up via
+`updateBubblePosition(id,x,y)` (fire-and-forget, no activity log); a click (no
+drag) opens the editor. Un-dragged bubbles fall back to a default above/below
+stack slot (`defaultOffset`). Canvas `height` grows to include dragged bubbles.
+CRUD via `src/app/project/[id]/actions.ts`, logged as
+`bubble.created/.edited/.deleted` (position changes are not logged).
+
+**Layer-1 notes shown on Layer 2 (read-only).** The `notes` table (user notes
+from Layer 1) is fetched in page.tsx and rendered as amber cards (NOTE_FILL /
+NOTE_BORDER) anchored to their `node_id` via a dotted amber connector (lane-level
+notes with null node_id attach to the first node). READ-ONLY here — notes.x/y are
+Layer-1 coordinates (x = a timestamp) so they don't translate; cards use a
+default lower-left stack slot instead. Editing/positioning stays in Layer 1. No
+migration (notes table pre-existed).
+
+**Draggable main nodes (migration `supabase/node-position.sql` — adds `l2_x`,
+`l2_y`).** Spine nodes can be dragged to custom Layer-2 canvas positions so the
+thread can be reshaped around annotations. Drag the node hit-area (pointer-
+capture, `dist>4` = drag vs click; double-click still renames; the +/⋯ buttons
+`stopPropagation` so clicking them doesn't drag). Persisted as absolute canvas
+coords via `updateNodePosition`; null = automatic serpentine slot. `positions`
+is overridden (live drag → persisted px/py → auto) BEFORE everything downstream
+(wire, bubbles, demoted branches, month band, height) so they all follow a
+dragged node. Layer-2-only — does NOT touch Layer 1 (which lays out by date).
+page.tsx fetches l2_x/l2_y in a separate tolerant query; writes swallow the
+missing-column error (`isMissingColumn`) so it's an in-session no-op until the
+migration runs.
+
+**Two sub-node kinds (migration `supabase/bubble-information.sql`).** `context`
+(dusty-blue `MANUAL_EDGE`, SOLID connector) and `information` (muted-violet
+`INFO_EDGE` #6f5a8c, DOTTED connector). Stored in `bubble_type` — the migration
+widens its check constraint (named `bubbles_bubble_type_check`, confirmed) from
+('context','insight') to also allow 'information'. The legacy NOT-NULL `kind`
+column stays 'context' for every bubble (its own constraint only knows
+context/insight/note; it's unused for display). Editor has a Context/Information
+toggle (both create + edit); `createBubble` takes the kind, `updateBubbleMeta`
+can change `bubble_type`. Only colour + connector dash differ — same card,
+title, size, shape, drag, editor. NOTE: creating an 'information' bubble BEFORE
+the migration fails the check (code 23514) and surfaces an alert (context still
+works); run the migration to enable it.
+
+**Sub-node title / size / shape (migration `supabase/bubble-style.sql` — adds
+`title`, `width`, `height`, `shape`).** Each card shows a **title** (header
+strip): editable, and when null it defaults to `deriveTitle(content)` (first
+line / first ~48 chars). The body is shown below only when it differs from the
+title (so a short note isn't duplicated). Title is edited via an input in the
+bubble editor (empty field = auto). **Resize:** a corner handle (shown on hover)
+drags width/height; top-left stays put (the centre offset is shifted by half the
+delta), persisted via `updateBubbleSize`. **Shape:** picker in the editor —
+rounded (default) / square / soft / pill — maps to border-radius (`SHAPE_RADIUS`),
+persisted via `updateBubbleMeta`. **The bubble editor is a centred fixed modal**
+(backdrop click = cancel) rather than a popup anchored to the bubble — a bubble
+near (or dragged to) an edge used to open the editor off-screen. The node `⋯`
+menu and inline rename stay anchored but are clamped within the canvas bounds.
+Title+shape go through `updateBubbleMeta`,
+SEPARATE from `updateBubble` (content) so content edits keep working before the
+migration. **Resilience: writes to not-yet-added columns are swallowed** — note
+the WRITE error is PostgREST `PGRST204` (schema-cache miss), the READ error is
+Postgres `42703`; `isMissingColumn()` handles both. page.tsx overlays
+title/width/height/shape from a separate tolerant query so bubbles always load.
 
 **Reserved for post-IP-waiver (DO NOT BUILD YET):** AI-generated bubbles
 (`source='ai'`, oxblood styling, "CONTEXT · AI" label) and **insight** bubbles
 (`bubble_type='insight'`). The enums/columns exist so they slot in with no
 schema rework; only manual context bubbles are created/rendered in v1.
+
+**Node editing (Layer 2 is the editable layer).** All node editing lives here;
+Layer 1 reflects the result. On each spine node, hover shows two affordances:
+`+` (add context note, top-right) and `⋯` (node actions, bottom-right);
+double-click a node to rename inline.
+- **Rename** → writes `display_label` (Sirmathread-only override; Gmail subject
+  untouched) and propagates to Layer 1. Optimistic local override + fire-and-
+  forget save; Enter/blur save, Esc cancels (guarded by a `renameCancel` ref so
+  blur doesn't override a cancel). Logged `node.renamed`.
+- **Type icon** → optional `nodes.node_type` (null = plain). Picker in the ⋯
+  menu; tapping the active type clears it. 7 types (email/decision/meeting/call/
+  payment/task/milestone) drawn as stroke-only line glyphs in a 24-box; shown as
+  a small badge at the node's top-left corner. Optimistic. **Migration
+  `supabase/node-type.sql` adds the column** — page.tsx fetches node_type in a
+  SEPARATE error-tolerant query (NOT the main select) so the page keeps working
+  before the migration runs; icons simply stay absent until then.
+- **Demote / Promote** → flips `nodes.state` between 'promoted' and 'demoted'.
+  Layer 1 only shows promoted, so demote removes a node from the overview; on
+  Layer 2 the demoted node renders as a small dashed "off" glyph branching off
+  its time-nearest spine node, with Promote/Rename on hover. Reversible, nothing
+  destroyed. Uses `router.refresh()` (not optimistic) since it reshapes the
+  serpentine spine. Logged `node.demoted` / `node.promoted`.
+- New server actions in `actions.ts`: `renameNode`, `setNodeState`,
+  `setNodeType` (resolve org via node→project, RLS blocks viewers, activity-
+  logged). page.tsx also captures the main-query `error` and shows a graceful
+  "database update may be pending" notice instead of a misleading 404.
+
+## Wave 2 — unified node detail panel (Layer 1)
+
+**Phase 1 (metadata) DONE.** The old centered node-editor modal in
+`src/app/layer1/Timeline.tsx` (the `{nodeMenu && …}` block, ~120 lines) is
+REPLACED by a right-docked slide-over panel. Same `nodeMenu` state + `openNode`
+trigger; same server actions (`updateNode`, `setNodeDeadline`, `clearNodeDeadline`,
+`setNodeDone`, `deleteNode`, optimistic `applyNodeTag`/`toggleNodeTag`).
+
+- **Container:** `fixed inset-0 flex items-center justify-end bg-black/30`
+  backdrop (click = close); inner panel `w-[400px]`, `maxHeight: min(720px,85vh)`,
+  right-docked (`mr-3`), `flex flex-col overflow-hidden`. Built as an IIFE so it
+  can derive `lane`/`projectName`/`cur` (current tags, read reactively from lane
+  state)/`tagInfo` (valueId→{value,color} from `categories`).
+- **Header region** (`border-b`, becomes sticky in Phase 2): inline title input
+  (borderless, saves on blur + Enter→blur via `panelSaveTitle` — reverts field +
+  sets `titleErr` on failure); subtitle `<date> · <project>` (date is a button
+  that opens `MiniCalendar` for manual nodes via `panelSaveDate`; static for
+  gmail); status chips row (Deadline chip: "Due <date>" w/ inline ✕ clear +
+  click-to-change, or dashed "Set deadline" → opens an inline MiniCalendar
+  popover `nodeCalOpen`; Complete chip toggles `completeNode`, sage-green when
+  done); tag row = applied pills (per-category colour, ✕ on hover removes) + a
+  dashed "+ Tag" button opening a popover that lists ALL categories/values with
+  ✓ on applied.
+- **Footer** (`border-t`): Delete with a two-step confirm (`confirmDeleteNode`).
+  The old "Save title / date" button + `saveNodeEdits` are REMOVED (saves are
+  automatic). "Open in Layer 2" + content sections come in Phase 2.
+- New state: `titleErr`, `confirmDeleteNode`, `tagPopoverOpen`. Handlers
+  `saveNodeDeadline`/`removeNodeDeadline`/`completeNode` now update `nodeMenu` in
+  place (keep the panel open) instead of closing it.
+- Data gaps to resolve in Phase 2: notes need `node_id` threaded into the
+  Timeline `Note` type (raw query already selects it); contexts (bubbles) and
+  email body/sender/thread-url are NOT loaded in Layer 1 yet.
+
+**Phase 2 (content + scroll + Layer 2 link) DONE.**
+- **Data fetch strategy:** on-demand. New server action `getNodeDetail(nodeId)` in
+  `layer1/actions.ts` returns `{ email, notes, contexts }` — email via nested
+  `nodes → emails(from_addr, body_text, date_sent, gmail_thread_id)` (snippet =
+  first 3 non-blank lines; threadUrl = `https://mail.google.com/mail/u/0/#all/<thread_id>`);
+  notes from `notes` where `node_id`; contexts from `bubbles` where `node_id`
+  (kind from `bubble_type`). Fetched in a `useEffect` keyed on `nodeMenu?.id`
+  (kept out of the heavy `/layer1` query). State: `nodeDetail`, `detailLoading`.
+- **Scroll structure:** the panel itself is the scroll container
+  (`overflow-y-auto`, `maxHeight: min(720px,85vh)`); the metadata header is
+  `sticky top-0 z-10 bg-paper-surface`; email/notes/context/footer flow below and
+  scroll. Footer is NOT sticky (scrolls with body) — by design.
+- **Sections:** email excerpt (mail icon + "From … · <relative>" via
+  `relTimeAgo`, 3-line snippet, "View full email →" opens Gmail thread in a new
+  tab; whole section hidden when the node has no email). Notes (yellow
+  `NOTE_FILL`/`NOTE_BORDER` cards, click-to-edit inline, "+" adds; reuses
+  `createNote`/`updateNoteBody`/`deleteNote` AND syncs the lane via
+  `addNoteToLane`/`updateNoteIn`/`removeNoteFromLane` so the L1 canvas updates
+  live). Context (left-accent cards coloured by kind — context #5a7d8c /
+  information #6f5a8c; click-to-edit with a kind toggle, "+" adds; reuses Wave-1
+  `createBubble`/`updateBubble`/`deleteBubble` imported from
+  `../project/[id]/actions`). Panel-local edit state: `noteEdit`, `ctxEdit`.
+- **Footer:** Delete (left, two-step confirm) + "Open in Layer 2 →" (right,
+  `next/link` to `/project/<lane.id>`).
+- **Tag popover centred** (`left-1/2 -translate-x-1/2`) per request so it can't
+  spill off the panel edge.
+- **Cross-layer sync:** both layers read the same tables; panel writes hit the DB
+  and show in Layer 2 on next load (and vice-versa). Notes also sync to the live
+  L1 canvas immediately via the lane helpers.
+
+**Phase 3 (Add popover redesign) DONE.** The `addChoice` popover (project "+"
+button) was a centered modal; now it's an **anchored floating popover**. The "+"
+`onClick` captures `e.clientX/clientY` into `addChoice.{x,y}`; the popover renders
+`position: fixed` at those coords, clamped to the viewport (width 288). Transparent
+click-catcher backdrop (no dimming — it's a quick action, not the slide-over).
+- Card style matches the node panel (`rounded-lg border-hairline bg-paper-surface
+  shadow-2xl`). Header: medium-weight sans "Add to <project>" + muted subtitle +
+  ✕. Sentence case, no emojis, weights 400/500 only.
+- Three full-width option cards (icon | title/subtitle, `hover:bg-paper-surface`):
+  Node (inline square-outline SVG), Ambition (inline circle-outline SVG), Note
+  (inline **ti-note** Tabler SVG, `NOTE_FILL` tint, amber text `#7a5c12`/`#9a7c3a`,
+  `hover:brightness-95`). Each still triggers the existing flow (`openAdd(...,
+  "node"|"ambition")`, `setNoteCompose`). Node card still gated by the minDate rule.
+- Footer (border-top, bottom-right): a small muted text button with an inline
+  **ti-calendar-plus** SVG (14px) — "Set deadline" or "Deadline · <d MMM>" when set.
+  Toggles an inline `MiniCalendar` (`addDeadlineOpen`) that writes a PROJECT-level
+  deadline. **No migration: `projects.deadline` already existed.** New action
+  `setProjectDeadline(projectId, date|null)` (sets `deadline` + `deadline_set_at`).
+  `Lane` type gained `deadline`; page.tsx maps `p.deadline`; optimistic
+  `saveProjectDeadline` via `patchLane` + revert on error. Footer text updates
+  reactively from lane state. No Tabler dependency added — icons inlined as SVG.
+
+**Resizable main nodes (migration `supabase/node-size.sql` — adds `l2_w`).**
+Layer-2 spine nodes are now resizable as well as draggable; both are Layer-2-only
+(text/rename still propagates to Layer 1 via `display_label`, but position+size do
+NOT). Square/uniform size: a bottom-left `nesw-resize` handle (shown on hover/while
+resizing) drags `l2_w` between 32–140px, center-anchored so the node's position is
+unchanged. Resolved size = live `nodeSize` override → persisted `pw` (l2_w) →
+default `NODE` (56); exposed via a `sizeById` map + `szOf(id)` helper. Node glyph
+(scale = sz/GLYPH), type badge, tag bars, label offset, hit-area, drag clamp,
+connector sockets (bubble/note use `szOf(parent)/2`), demoted/note/default-bubble
+offsets, node-menu anchor, and canvas height all read per-node size. `GSCALE`
+const removed (scale now per-node). Persist via new `updateNodeSize(nodeId, w)`
+action (swallows missing-column → in-session no-op until the migration runs).
+page.tsx fetches `l2_w` in its own tolerant query (separate from l2_x/l2_y so a
+pending migration doesn't break position persistence). `L2Node` gained `pw`.
+
+**Notes draggable + resizable on Layer 2 (migration `supabase/note-layout.sql`
+— adds `l2_x`, `l2_y`, `l2_w` to `notes`).** SUPERSEDES the earlier "read-only"
+note rendering. Note cards now carry their OWN Layer-2 position (absolute centre,
+`l2_x/l2_y`) and width (`l2_w`) — independent of the Layer-1 x/y, so moving/
+resizing a note in Layer 2 never disturbs the overview. Whole card drags
+(pointer-capture, dist>4 = drag); bottom-right `ew-resize` handle (on hover)
+changes width 120–320px (height stays auto). Persisted via new
+`updateNoteLayout(id, {x?,y?,w?})` in layer1/actions.ts (swallows missing-column
+→ in-session no-op until the migration). Resolved like bubbles: live override →
+persisted l2_* → default lower-left stack slot. page.tsx fetches l2_* in a
+separate tolerant query; `L2NoteItem` gained x/y/w. Text is still edited in
+Layer 1 / the node panel (cross-layer via shared `notes.body`); only L2
+position/size are L2-only. (Note: the Wave-2 turn that added spine-node *resize*
+was a misread of "nodes" for "notes"; spine-node resize was kept at the user's
+request, and this adds the notes behaviour they actually meant.)
