@@ -7,9 +7,12 @@ import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
 import NewProjectButton from "./NewProjectButton";
 import GenerateButton from "./GenerateButton";
+import ByoButton from "./ByoButton";
 import QuickPasteBar from "./QuickPasteBar";
 import ToastHost from "./Toast";
 import { WandProvider } from "./wand";
+import ResponsiveSwitch from "../ResponsiveSwitch";
+import MobileLayer1List from "./MobileLayer1List";
 
 // ---- Types -------------------------------------------------------------------
 type DbEmail = { subject: string | null; date_sent: string | null };
@@ -354,7 +357,7 @@ export default async function Layer1Page({
     })),
   }));
 
-  return (
+  const desktop = (
     <main className="flex h-screen flex-col bg-paper text-ink">
       <header className="flex items-center justify-between border-b border-hairline bg-paper-surface px-6 py-3">
         <div className="flex items-baseline gap-3">
@@ -366,6 +369,7 @@ export default async function Layer1Page({
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <ByoButton />
           <GenerateButton importsRemaining={importsRemaining} welcomeBonusConsumed={welcomeBonusConsumed} />
           <NewProjectButton />
           <AccountMenu
@@ -398,4 +402,7 @@ export default async function Layer1Page({
       <ToastHost />
     </main>
   );
+
+  // ≤640px → mobile list; >640px → the desktop canvas above (byte-identical).
+  return <ResponsiveSwitch desktop={desktop} mobile={<MobileLayer1List lanes={lanes} tagCatalog={tagCatalog} />} />;
 }

@@ -643,7 +643,7 @@ The stub from the UI brief is gone; `triggerGeneration` POSTs to the backend.
   Haiku's 4096-token cache minimum — harmless; caches when long enough.)
 
 ### JSON schemas
-- **Haiku (structure):** `{ project: { title, deadline: string|null, primary_participant: string|null, tags: string[] }, nodes: [ { id, title, date(YYYY-MM-DD), type: "node"|"ambition" } ] }`
+- **Haiku (structure):** `{ project: { title, deadline: string|null, primary_participant: string|null, tags: string[] }, nodes: [ { id, title, date(YYYY-MM-DD), type: "node"|"ambition", tags: string[] } ] }` (node `tags` = subset of project tags relevant to that event; optional in the validator)
 - **Sonnet (context):** same, each node + `contexts: [ { body } ]` (0–5).
 
 ### System prompts — VERBATIM (keep in sync with `providers/anthropic.ts`)
@@ -660,6 +660,7 @@ The stub from the UI brief is gone; `triggerGeneration` POSTs to the backend.
 > - Classify each node by its date relative to TODAY (the parse date is given in the user message): past or today → "node"; future → "ambition".
 > - Project metadata: a declarative, concise title; a deadline ONLY if one is explicitly stated in the source (otherwise null); identify the primary participant — the main "character" — when there is a clear one (otherwise null).
 > - Tag detection: extract people, organizations, and recurring topics as tags. Normalize variants to the fullest form (e.g. "Ting" and "Ting Lee" → "Ting Lee"). Any user-supplied tag hints take PRIORITY and must be included. Maximum 5 tags.
+> - Per-node tags: for EACH node, also set "tags" to the subset of project tags directly involved in THAT event (exact same strings; do not invent node-only tags). Empty array if none. Max 4 per node.
 > - Prefer FEWER nodes over more when uncertain. Skip noise. NEVER invent facts, dates, names, or events that are not supported by the source.
 > - When the content is genuinely unstructurable, output a minimal valid result: one project with a single node titled to signal that it could not be structured further (e.g. "Unstructured note captured").
 > - HARD CAP: at most 50 nodes per project. If you approach that, consolidate aggressively.
@@ -792,8 +793,8 @@ back, and we parse it deterministically. No Anthropic call, no import cost.
   informations[],contexts[]}], skippedCount, truncatedCount }`. (No per-event count
   cap — template asks LLM for ≤3; parser keeps what it's given, char-truncates only.)
 - **API contract:** `POST /api/parse-byo { rawText }`. 400 empty / >200,000 chars;
-  401/403 auth/writer; **422** when 0 events AND auto project ("No structured timeline
-  content found…"); 200 `{ project_id, summary: { events, informations, contexts,
+  401/403 auth/writer; **422** when 0 events parsed (any reason — "No dated events
+  found…"; never creates an empty project); 200 `{ project_id, summary: { events, informations, contexts,
   skipped, truncated } }`. Persists via `generate_ai_project(…, p_source:"byo")` — the
   SAME atomic RPC as AI, now parameterised by source. **FREE:** no quota consume.
 - **Schema (`supabase/byo-source.sql`):** `bubbles.source` += `'byo'`;
@@ -809,3 +810,104 @@ back, and we parse it deterministically. No Anthropic call, no import cost.
   422/400 → inline error (no navigate); other errors → message kept in the dialog.
   The Layer-2 flash toast now reads a MESSAGE from `GENERATED_FLAG` (AI sets a fixed
   string, BYO sets the parse summary).
+
+### BYO parser hardening — DATE-delimited, blank-line-independent
+
+`parseByo` (`src/lib/byo/parser.ts`) was a blank-line BLOCK splitter: an LLM (or a
+clipboard paste) that dropped the blank lines between blocks collapsed the whole
+paste into one block, and because it held a `PROJECT:` line the parser took the
+header and discarded EVERY event (`events_count:0`, project still created → empty
+project). Rewritten as a **line-driven scan**: a new event starts at each `DATE:`
+line; TITLE/TYPE/INFO/CONTEXT attach to the event under construction; PROJECT/TAGS
+set the header (TAGS before PROJECT is buffered in `pendingTags`). Blank lines are
+now optional, not load-bearing. Also tolerant of **markdown-decorated keys**
+(`**DATE:**`, `### TITLE:`, `> INFO:`) via `normalizeKey()` + a leading-emphasis
+strip on the value (only when the marker run is followed by whitespace/end, so a
+genuine `*emphasis*` inside a value survives). Route guard tightened: `parse-byo`
+now 422s whenever `events.length === 0` (previously only when the project was also
+auto-generated — the exact gap the run-together paste fell through). Regression
+tests in `parser.test.ts` cover both cases.
+
+## AI/BYO generation — tag persistence (project + node) + ambition routing
+
+Both generators DETECTED tags + ambitions but the persistence layer dropped both,
+AND tags were only ever project-level. Fixed in `supabase/ai-tags-ambitions.sql`
+(RPC links everything atomically) + a tag-resolution helper.
+
+- **Ambitions (RPC).** `generate_ai_project` previously inserted EVERY payload node
+  into `nodes` (hardcoded `state='promoted'`), ignoring `node_type`. Now the node
+  loop branches: `node_type='ambition'` (future, classified by Haiku) → `insert into
+  ambitions (project_id, organization_id, created_by_user_id, title, target_date)`
+  then `continue` (NO bubbles — the `ambitions` table holds none, so an ambition's AI
+  info/context is dropped BY DESIGN); else → the existing node + info/context inserts.
+  `ambitions.organization_id` is NOT NULL (multi-user-orgs), so the insert passes it.
+- **Tags — resolved in TS, LINKED in the RPC (atomic).** The payload now carries
+  RESOLVED `tag_value_ids` (NOT tag strings): `project.tag_value_ids` + per-node
+  `tag_value_ids`. The RPC links `project_tag_values`, `node_tag_values` (array order
+  = `position`; 0 = primary fill colour), and `ambition_tag_values`. Resolution lives
+  in `src/lib/tags/`: `resolveTags.ts` (pure: case-insensitive/trimmed match vs the
+  workspace's existing `tag_values`, first-casing-wins, returns `{linkIds, toCreate,
+  matched}` + a `tagIdsFor(names, map)` lookup; unit-tested) and `ensureTagValueIds.ts`
+  (reuses existing + auto-creates new under a find-or-create **"Auto-detected"**
+  category, colours cycled from `SPINE_PALETTE`; **NEVER throws** — returns a possibly
+  empty `lower(name)→id` map so a tag hiccup can't fail/refund a generation).
+- **Per-node tags (AI only).** Haiku emits `nodes[].tags` (subset of project tags for
+  that event). The route builds `nodeTagsById` from the STRUCTURE stage (keyed by AI
+  node id — NOT trusted to survive Sonnet) and `toGenerationPayload` maps each node's
+  tag strings → ids via the resolved map. BYO has no per-node tags (template doesn't
+  ask) — its nodes get `tag_value_ids: []`; project tags still link.
+- **Route flow.** `generate-project`: gather project+node tag strings → `ensureTagValueIds`
+  → `toGenerationPayload({tagMap, nodeTagsById})` → RPC. `parse-byo`: `ensureTagValueIds`
+  on project tags → `tagIdsFor` → payload. (The old post-hoc `applyDetectedTags` helper
+  is gone — linking is now inside the RPC transaction.)
+- **The LLM is NOT given the existing tag vocabulary** as a prompt hint — reuse is
+  match-on-persist only; feeding the catalog to Haiku (so "John" aligns to existing
+  "John Smith") is a deferred option.
+
+### Layer 2 now renders ambitions (`project/[id]`)
+
+Ambitions were Layer-1-only; the project page query didn't even fetch the table, so
+AI/manual future items vanished after generation. `page.tsx` now selects
+`ambitions(id, title, target_date, done)` in the main query + an ambition-tags overlay
+(`ambition_tag_values`, tolerant) → `L2Ambition[]`. `Layer2Canvas` renders them as
+**round dashed markers** in a row beneath the last spine row (wrapping past COL_W),
+joined to the thread by a dashed wire; fill = primary tag colour, done → muted + check.
+READ-ONLY on Layer 2 (create/edit stays on Layer 1) to keep the change contained — no
+drag/edit handlers. Header shows `· N planned`. Edge case: an all-future project (0
+spine nodes) still hits the "only future items" empty-state message rather than a
+bespoke ambitions-only canvas.
+
+## Mobile breakpoint (≤640px) — Layer 1 list + vertical timeline
+
+A NEW responsive layer, not a restyle. Desktop (>640px) is byte-identical to before.
+
+- **Breakpoint source of truth:** `src/app/useIsMobile.ts` (`MOBILE_MAX = 640`,
+  `matchMedia('(max-width:640px)')`, re-reads on resize; returns `boolean | null`).
+  `src/app/ResponsiveSwitch.tsx` renders `desktop` OR `mobile`: while `null` (first
+  paint) BOTH render, each wrapped in `hidden min-[641px]:block` / `min-[641px]:hidden`
+  so CSS shows the right one with no flash/hydration-mismatch; after mount only the
+  matched subtree stays mounted (heavy desktop canvas never mounts on phones). The
+  `min-[641px]` classes mirror `MOBILE_MAX` so JS+CSS can't disagree.
+- **Pages compose, not fork:** `layer1/page.tsx` and `project/[id]/page.tsx` fetch+shape
+  data exactly as before, then return `<ResponsiveSwitch desktop={…} mobile={…}/>`.
+- **Reused (no parallel types):** `Lane`/`LaneNode`/`Ambition`/`Note` (now exported from
+  `Timeline.tsx`); `L2Node`/`L2Bubble`/`L2Ambition`/`L2NoteItem` (Layer2Canvas);
+  `SubnodeChip` + `CHIP` (note/information/context fills); `deadlineStage`+`lane.attention`;
+  `tagColors` + primary = `tags[0]`.
+- **Shared util lift (verbatim, no signature change):** `src/lib/dateFormat.ts` now owns
+  `fmtEU` (was Timeline.tsx) and `humanGap`+`GAP_NOTE_DAYS` (was Layer2Canvas.tsx); both
+  desktop files import them. Output unchanged.
+- **Screen 1 — `MobileLayer1List.tsx`:** vertical cards from `lanes`. Left spine =
+  primary-tag colour; attention dot only when `attention==='alert'`; ≤2 tag pills + "+N"
+  (truncating); meta = node count + ONE date (next deadline/ambition else last-updated).
+  Chips All/Needs me/Recent = single-select segmented control composing `attention` +
+  last-updated sort (NO new filter params). No search/+ rendered.
+- **Screen 2 — `MobileProjectTimeline.tsx`:** vertical spine; per node NOTES (inline,
+  first) → INFO (inline, `clampLines={2}`) → CONTEXT (tap to expand). CONTEXT is the only
+  collapsible (accordion; node is a real `<button aria-expanded>` only when it has context;
+  chevron rotates; `scrollIntoView({block:'nearest'})` keeps tapped node visible). Ambitions
+  = dashed hollow ring; deadline nodes = solid alert-colour ring on the dot (the desktop
+  4-quarter clock is desktop-only — too small to read on a mobile dot). Gaps reuse
+  `humanGap`/`GAP_NOTE_DAYS`. **Sub-tag bars are DROPPED on mobile** (too cramped on a
+  narrow row) — only the primary tag colours the dot. Project-level notes (no nodeId) show
+  in a block above the timeline. Notes are view-only on mobile in this PR.

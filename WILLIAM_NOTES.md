@@ -424,3 +424,94 @@ tells you how many), and over-long bubbles get trimmed. You'll land on the new p
 with a quick summary of what was parsed.
 
 **One-time setup:** run **`supabase/byo-source.sql`** so BYO projects can be saved.
+
+### BYO bugfix + tags & ambitions now actually save
+
+Two fixes after testing the BYO tool on a real booking thread:
+
+1. **BYO now works even with no blank lines.** The parser used to need a blank line
+   between each event; if your LLM's output ran the lines together (which it did),
+   the whole thing collapsed and **no events were created** — you'd get an empty
+   project. It now reads each `DATE:` line as the start of a new event, so spacing
+   no longer matters, and it shrugs off markdown like `**DATE:**` too. If it ever
+   genuinely finds zero dated events, it now tells you instead of making an empty
+   project.
+
+2. **Tags and ambitions from AI/BYO now save.** Before, the AI *found* tags and
+   spotted future events, but they were silently thrown away when the project was
+   created. Now:
+   - **Tags** — it reuses your existing tags when the name matches (so no
+     duplicates), and any genuinely new ones it invents go into a new
+     **"Auto-detected"** tag category you can rename or clean up later.
+   - **Ambitions** — any future-dated item becomes a proper round **ambition**
+     marker (like the ones you add by hand), instead of a normal past node sitting
+     in the future. (Trade-off: those future markers don't carry the little AI
+     info/context notes, since ambitions are simple markers.)
+
+**One-time setup:** run **`supabase/ai-tags-ambitions.sql`** in Supabase. This one
+migration now does three jobs (see the next note), so it's required for tags AND
+ambitions to save correctly.
+
+### Tags on nodes + ambitions visible on the project page
+
+Two follow-ups after you noticed (a) ambitions were showing as squares and (b) tags
+only landed on the project, not the individual nodes:
+
+1. **Tags now land on individual nodes too.** When the AI reads your content it now
+   decides which people/topics are involved in *each event* and tags that node — so
+   nodes get individually coloured (the first tag sets the node's colour, like on the
+   overview), not just the project as a whole. It still reuses your existing tags and
+   only invents new ones under the **"Auto-detected"** category.
+2. **Ambitions now show on the project page (Layer 2).** Future items appear as round
+   dashed markers at the bottom of the thread, joined by a dashed line — the same idea
+   as the overview. The header shows e.g. "5 nodes · 1 planned". (They're view-only on
+   the project page for now — to rename/retime an ambition, use the overview.)
+
+**Why the squares happened:** the `ai-tags-ambitions.sql` migration hadn't been run
+yet, so the old database rule was still saving future items as ordinary nodes. **Run
+that file in the Supabase SQL editor** and regenerate — future items will become round
+ambitions and node tags will appear. Until it's run, generation still works; ambitions
+just stay as plain nodes and node tags won't save.
+
+### New-user walkthrough — an event-planner demo
+
+Brand-new accounts no longer get the 10 random ad-agency demo projects. Instead, on
+first sign-in they get a hand-built **event-planner walkthrough**: four events you'd
+plan — a wedding, a 30th birthday, a corporate gala, and a conference — each with about
+six milestones laid out on its timeline. The events go from **simple to advanced**:
+
+- **Olivia & Daniel's Wedding** — the gentle intro: what a timeline/milestone is, how a
+  tag colours a node, and a node deadline (the red ring).
+- **Maya's 30th Birthday** — marking a milestone done (✓), multiple tags as colour bars,
+  and opening a milestone's detail panel.
+- **Acme Corp Summer Gala** — Context/Info notes around a milestone (open the event to
+  see them), the tag lens, and renaming a milestone.
+- **TechFwd Conference** — completed vs live deadlines, and ambitions (the round future
+  markers — here, the conference dates).
+
+About half the milestones carry a short amber note explaining the feature that's
+actually switched on in that very milestone. Everything is tagged "tutorial" behind the
+scenes, so it can be wiped in one go and never re-seeds once dismissed.
+
+**To preview it on your own account** (which was seeded with the old demo already), see
+the reset SQL Claude gives you — it clears the old tutorial projects and lets the new
+one seed on your next login.
+
+## On your phone (new)
+
+Open Sirmathread on a phone (any screen up to 640px wide) and you now get a layout
+built for the small screen — your normal desktop view is untouched on bigger screens.
+
+- **Project list:** a clean vertical list of your projects. Each row shows a colour
+  stripe (the project's main tag), a dot when a project needs your attention, up to two
+  tag pills (with "+N" if there are more), and a one-line summary (how many events, plus
+  the next deadline or — if none — when it was last updated). Tap **All / Needs me /
+  Recent** at the top to switch what you see.
+- **Tap a project → its timeline**, running top to bottom. Each event shows its date,
+  title, your **notes first**, then the key **info**. If an event has extra background
+  (**context**), tap it to expand — a little arrow shows there's more; tap again to close.
+- **Back** returns you to the list right where you left off.
+
+Notes: on a phone your own notes are always shown inline and first (never hidden behind a
+tap); notes are **view-only on mobile in this version** (no note editing yet). Adding
+projects and search aren't on the phone yet either — those stay on the desktop for now.

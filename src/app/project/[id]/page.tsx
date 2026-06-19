@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import Layer2Canvas, { type L2Node, type L2Bubble, type NodeType, type TagCategory, type L2NoteItem } from "./Layer2Canvas";
+import Layer2Canvas, { type L2Node, type L2Bubble, type NodeType, type TagCategory, type L2NoteItem, type L2Ambition } from "./Layer2Canvas";
 import GenerationToast from "./GenerationToast";
+import ResponsiveSwitch from "../../ResponsiveSwitch";
+import MobileProjectTimeline from "./MobileProjectTimeline";
 
 // Same deadline-stage rule as Layer 1 (0 = none, 1..4 = perimeter quarters).
 function deadlineStage(deadline: string | null, setAt: string | null): number {
@@ -39,6 +41,7 @@ type DbProject = {
   spine_color: string | null;
   project_tag_values: { tag_values: { value: string; color: string | null } | null }[];
   nodes: DbNode[];
+  ambitions: { id: string; title: string; target_date: string; done: boolean }[];
 };
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -54,7 +57,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "id, organization_id, display_name, gmail_label_name, spine_color, project_tag_values(tag_values(value, color)), nodes(id, display_label, done, deadline, deadline_set_at, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id, position))"
+      "id, organization_id, display_name, gmail_label_name, spine_color, project_tag_values(tag_values(value, color)), nodes(id, display_label, done, deadline, deadline_set_at, state, origin, node_date, emails(subject, date_sent), node_tag_values(tag_value_id, position)), ambitions(id, title, target_date, done)"
     )
     .eq("id", id)
     .maybeSingle();
@@ -143,6 +146,50 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     .filter((n) => n.state === "demoted")
     .map(toL2Node)
     .sort((a, b) => a.t - b.t);
+
+  // Ambitions (future round markers). Their tags live in ambition_tag_values —
+  // fetched separately and tolerantly so a missing table can't break the page
+  // (ambitions just render untagged in that case).
+  const ambRows = project.ambitions ?? [];
+  const ambTagsById: Record<string, string[]> = {};
+  if (ambRows.length > 0) {
+    const { data: atvRows, error: atvErr } = await supabase
+      .from("ambition_tag_values")
+      .select("ambition_id, tag_value_id")
+      .in(
+        "ambition_id",
+        ambRows.map((a) => a.id)
+      );
+    if (!atvErr) {
+      for (const r of (atvRows ?? []) as { ambition_id: string; tag_value_id: string }[]) {
+        (ambTagsById[r.ambition_id] ??= []).push(r.tag_value_id);
+      }
+    }
+  }
+  // Custom Layer-2 ambition positions (columns from ambition-l2-position.sql;
+  // tolerate their absence so dragging just doesn't persist until the migration runs).
+  const ambPos: Record<string, { x: number; y: number }> = {};
+  if (ambRows.length > 0) {
+    const { data: ambPosRows, error: ambPosErr } = await supabase.from("ambitions").select("id, l2_x, l2_y").eq("project_id", id);
+    if (!ambPosErr) {
+      for (const r of (ambPosRows ?? []) as { id: string; l2_x: number | null; l2_y: number | null }[]) {
+        if (r.l2_x != null && r.l2_y != null) ambPos[r.id] = { x: r.l2_x, y: r.l2_y };
+      }
+    }
+  }
+  const ambitions: L2Ambition[] = ambRows
+    .filter((a) => a.target_date)
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      date: a.target_date,
+      t: new Date(a.target_date + "T00:00:00Z").getTime(),
+      done: a.done,
+      tags: ambTagsById[a.id] ?? [],
+      px: ambPos[a.id]?.x ?? null,
+      py: ambPos[a.id]?.y ?? null,
+    }))
+    .sort((x, y) => x.t - y.t);
 
   // Tag catalog for this workspace: categories + their values. Drives both the
   // node fill/bar colours and the apply-tags picker in the node ⋯ menu.
@@ -270,7 +317,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     .maybeSingle();
   const canEdit = mem?.role === "owner" || mem?.role === "member";
 
-  return (
+  const desktop = (
     <main className="flex min-h-screen flex-col bg-paper text-ink">
       <header className="flex items-center gap-4 border-b border-hairline bg-paper-surface px-6 py-3">
         <Link href="/layer1" className="text-sm text-muted hover:text-ink">
@@ -288,12 +335,14 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         </div>
         <span className="ml-auto text-xs text-muted">
           {nodes.length} node{nodes.length === 1 ? "" : "s"}
+          {ambitions.length > 0 ? ` · ${ambitions.length} planned` : ""}
         </span>
       </header>
 
       <Layer2Canvas
         nodes={nodes}
         demoted={demoted}
+        ambitions={ambitions}
         bubbles={bubbles}
         notes={notes}
         tagColors={tagColors}
@@ -302,7 +351,17 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         projectId={project.id}
         projectName={name}
       />
-      <GenerationToast />
     </main>
+  );
+
+  // ≤640px → vertical mobile timeline; >640px → the desktop canvas above.
+  return (
+    <>
+      <ResponsiveSwitch
+        desktop={desktop}
+        mobile={<MobileProjectTimeline name={name} nodes={nodes} bubbles={bubbles} notes={notes} ambitions={ambitions} tagColors={tagColors} />}
+      />
+      <GenerationToast />
+    </>
   );
 }
