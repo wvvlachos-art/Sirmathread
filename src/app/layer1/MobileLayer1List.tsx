@@ -13,16 +13,17 @@ import type { Lane } from "./Timeline";
 // "Recent" = last-updated sort, "All" = everything as fetched.
 
 type TagCat = { id: string; name: string; isHide: boolean; values: { id: string; value: string; color: string }[] };
-type Filter = "all" | "needs" | "recent";
+type Filter = "all" | "overdue" | "recent";
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "needs", label: "Needs me" },
+  { id: "overdue", label: "Overdue" },
   { id: "recent", label: "Recent" },
 ];
 
 export default function MobileLayer1List({ lanes, tagCatalog }: { lanes: Lane[]; tagCatalog: TagCat[] }) {
   const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
 
   const tagById = useMemo(() => {
     const m = new Map<string, { value: string; color: string }>();
@@ -31,15 +32,32 @@ export default function MobileLayer1List({ lanes, tagCatalog }: { lanes: Lane[];
   }, [tagCatalog]);
 
   const shown = useMemo(() => {
-    if (filter === "needs") return lanes.filter((l) => l.attention === "alert");
-    if (filter === "recent")
-      return [...lanes].sort(
+    const now = Date.now();
+    // Overdue = any past, not-yet-done deadline (a node at stage 4 = due/overdue,
+    // or a past project-level deadline).
+    const isOverdue = (l: Lane) =>
+      l.nodes.some((n) => n.deadline && !n.done && n.stage === 4) ||
+      (l.deadline ? new Date(l.deadline).getTime() < now : false);
+
+    let base: Lane[];
+    if (filter === "overdue") base = lanes.filter(isOverdue);
+    else if (filter === "recent")
+      base = [...lanes].sort(
         (a, b) =>
           (b.lastActivityAt ? new Date(b.lastActivityAt).getTime() : 0) -
           (a.lastActivityAt ? new Date(a.lastActivityAt).getTime() : 0)
       );
-    return lanes;
-  }, [lanes, filter]);
+    else base = lanes;
+
+    // Search filters by project name OR tag label (case-insensitive).
+    const q = query.trim().toLowerCase();
+    if (q) {
+      base = base.filter(
+        (l) => l.name.toLowerCase().includes(q) || l.tags.some((id) => tagById.get(id)?.value.toLowerCase().includes(q))
+      );
+    }
+    return base;
+  }, [lanes, filter, query, tagById]);
 
   return (
     <main className="flex min-h-screen flex-col bg-paper text-ink">
@@ -50,6 +68,18 @@ export default function MobileLayer1List({ lanes, tagCatalog }: { lanes: Lane[];
       >
         <h1 className="brand-serif text-lg text-oxblood">Projects</h1>
       </header>
+
+      {/* search — filters by project name or tag */}
+      <div className="border-b border-hairline bg-paper-surface px-4 py-2">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search projects or tags…"
+          aria-label="Search projects or tags"
+          className="w-full rounded-md border border-hairline bg-paper px-3 py-2.5 text-sm text-ink outline-none focus:border-oxblood"
+        />
+      </div>
 
       {/* single-select segmented filter */}
       <div className="flex gap-1.5 border-b border-hairline bg-paper-surface px-4 py-2">
@@ -78,7 +108,11 @@ export default function MobileLayer1List({ lanes, tagCatalog }: { lanes: Lane[];
         {lanes.length === 0 ? (
           <EmptyState title="No projects yet" sub="Create a project on a larger screen and it will show up here." />
         ) : shown.length === 0 ? (
-          <EmptyState title="Nothing needs you" sub="No projects are urgent right now." />
+          query.trim() ? (
+            <EmptyState title="No matches" sub="Try a different search." />
+          ) : (
+            <EmptyState title="Nothing overdue" sub="No projects have a past deadline." />
+          )
         ) : (
           <ul>
             {shown.map((l) => (
