@@ -221,6 +221,22 @@ export async function updateNodeSize(nodeId: string, w: number): Promise<{ error
   return {};
 }
 
+// Persist a dragged ambition/deadline marker on the Layer 2 canvas. Columns added
+// by supabase/ambition-l2-position.sql; a missing-column error is swallowed so it's
+// an in-session no-op until the migration runs. Layer-2-only (Layer 1 lays
+// ambitions out by date).
+export async function updateAmbitionPosition(ambitionId: string, x: number, y: number): Promise<{ error?: string }> {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return { error: "Invalid position." };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "You're not signed in." };
+  const { error } = await supabase.from("ambitions").update({ l2_x: x, l2_y: y }).eq("id", ambitionId);
+  if (error) return isMissingColumn(error) ? {} : { error: error.message };
+  return {};
+}
+
 // Set or clear a node's optional type icon (null = blank).
 export async function setNodeType(nodeId: string, type: NodeType | null): Promise<{ error?: string }> {
   if (type !== null && !NODE_TYPES.includes(type)) return { error: "Unknown node type." };
@@ -331,7 +347,8 @@ export async function resetL2Layout(projectId: string): Promise<{ error?: string
   const r1 = await supabase.from("nodes").update({ l2_x: null, l2_y: null }).eq("project_id", projectId);
   const r2 = await supabase.from("bubbles").update({ x: null, y: null }).eq("project_id", projectId);
   const r3 = await supabase.from("notes").update({ l2_x: null, l2_y: null, l2_w: null }).eq("project_id", projectId);
-  const err = r1.error ?? r2.error ?? r3.error;
+  const r4 = await supabase.from("ambitions").update({ l2_x: null, l2_y: null }).eq("project_id", projectId);
+  const err = r1.error ?? r2.error ?? r3.error ?? r4.error;
   if (err && !isMissingColumn(err)) return { error: err.message };
   return {};
 }

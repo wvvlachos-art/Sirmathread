@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { NODE_FILL, OXBLOOD, MUTED, PAPER_SURFACE, NOTE_BORDER, ATTENTION_ALERT, CHIP, darken } from "@/lib/theme";
-import { createBubble, updateBubble, updateBubbleMeta, updateBubbleSize, deleteBubble, updateBubblePosition, updateNodePosition, updateNodeSize, renameNode, setNodeState, setNodeType, resetL2Layout } from "./actions";
+import { createBubble, updateBubble, updateBubbleMeta, updateBubbleSize, deleteBubble, updateBubblePosition, updateNodePosition, updateAmbitionPosition, updateNodeSize, renameNode, setNodeState, setNodeType, resetL2Layout } from "./actions";
 import { toggleNodeTag, updateNoteLayout } from "@/app/layer1/actions";
 import SubnodeChip from "@/app/SubnodeChip";
+import { humanGap, GAP_NOTE_DAYS } from "@/lib/dateFormat";
 
 export type TagCategory = { id: string; name: string; values: { id: string; value: string; color: string | null }[] };
 // User notes authored on Layer 1 (notes table). Shown on Layer 2, where they can
@@ -31,6 +32,18 @@ export type L2Node = {
   py: number | null;
   pw: number | null; // custom Layer-2 node size (square px; null = default)
 };
+// Future items (ambitions table). Round dashed markers; read-only on Layer 2
+// (create/edit lives on Layer 1). Mirrors Layer 1's ambition visual.
+export type L2Ambition = {
+  id: string;
+  title: string;
+  date: string; // YYYY-MM-DD (target date)
+  t: number; // target date in ms, for ordering + placement
+  done: boolean;
+  tags: string[]; // tag_value ids; tags[0] colours the marker
+  px: number | null; // custom Layer-2 canvas position (null = auto layout)
+  py: number | null;
+};
 export type BubbleKind = "context" | "information";
 export type L2Bubble = {
   id: string;
@@ -38,7 +51,7 @@ export type L2Bubble = {
   content: string;
   side: "above" | "below";
   source: "manual" | "ai";
-  kind: BubbleKind; // 'context' (dusty-blue, solid wire) | 'information' (violet, dotted wire)
+  kind: BubbleKind; // 'context' (dusty-blue, dotted wire) | 'information' (violet, solid wire)
   // Persisted drag position, stored as an OFFSET from the parent node centre
   // (null until the user drags it; then it falls back to the default stack slot).
   x: number | null;
@@ -109,12 +122,6 @@ const MAX_SPACING = 600;
 const spacingFor = (gapDays: number) =>
   Math.max(MIN_SPACING, Math.min(MAX_SPACING, MIN_SPACING + LOG_FACTOR * Math.log(1 + Math.max(0, gapDays))));
 
-const GAP_NOTE_DAYS = 14;
-function humanGap(days: number): string {
-  if (days < 60) return `~${Math.max(2, Math.round(days / 7))} weeks later`;
-  if (days < 365) return `~${Math.round(days / 30)} months later`;
-  return `~${Math.round((days / 365) * 10) / 10} years later`;
-}
 
 // --- bubbles ---
 const CONN = 22;
@@ -165,6 +172,7 @@ type Editing =
 export default function Layer2Canvas({
   nodes: spineNodes,
   demoted,
+  ambitions = [],
   bubbles: initialBubbles,
   notes,
   tagColors,
@@ -175,6 +183,7 @@ export default function Layer2Canvas({
 }: {
   nodes: L2Node[];
   demoted: L2Node[];
+  ambitions?: L2Ambition[];
   bubbles: L2Bubble[];
   notes: L2NoteItem[];
   tagColors: Record<string, string>;
@@ -208,6 +217,11 @@ export default function Layer2Canvas({
   const nodePosRef = useRef<Record<string, { x: number; y: number }>>({});
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
   const nodeDragRef = useRef<{ id: string; moved: boolean; dist: number } | null>(null);
+  // Ambition/deadline-marker drag: same pattern as nodes (absolute canvas coords).
+  const [ambPos, setAmbPos] = useState<Record<string, { x: number; y: number }>>({});
+  const ambPosRef = useRef<Record<string, { x: number; y: number }>>({});
+  const [draggingAmb, setDraggingAmb] = useState<string | null>(null);
+  const ambDragRef = useRef<{ id: string; moved: boolean; dist: number } | null>(null);
   // Main-node resize (square; Layer-2-only): size overrides + ref + which node.
   const [nodeSize, setNodeSize] = useState<Record<string, number>>({});
   const nodeSizeRef = useRef<Record<string, number>>({});
@@ -254,8 +268,10 @@ export default function Layer2Canvas({
 
   if (nodes.length === 0) {
     return (
-      <div ref={ref} className="flex flex-1 items-center justify-center p-16 text-sm text-muted">
-        This project has no nodes yet.
+      <div ref={ref} className="flex flex-1 items-center justify-center p-16 text-center text-sm text-muted">
+        {ambitions.length > 0
+          ? "This project only has future items (ambitions) so far — see them on the overview."
+          : "This project has no nodes yet."}
       </div>
     );
   }
@@ -467,7 +483,27 @@ export default function Layer2Canvas({
   const noteBottom = noteInstances.reduce((m, n) => Math.max(m, n.cy + 60), 0);
 
   const lastRowBottom = rowY[numRows - 1] + maxBelow[numRows - 1] + 60;
-  const height = Math.max(lastRowBottom, demotedBottom + 40, bubbleBottom + 40, nodeBottom, noteBottom);
+
+  // ---- ambitions: round dashed markers continuing below the thread (read-only
+  // on Layer 2 — create/edit lives on Layer 1). Laid out left-to-right in a row
+  // beneath the last spine row, wrapping when they exceed the column width. ----
+  const AMB_R = 18;
+  const AMB_GAP = 200;
+  const AMB_ROW_H = 96;
+  const ambStartY = lastRowBottom - 10;
+  const ambPerRow = Math.max(1, Math.floor((COL_W - PAD - BAND_W) / AMB_GAP));
+  const ambInstances = [...ambitions]
+    .sort((a, b) => a.t - b.t)
+    .map((a, i) => {
+      const row = Math.floor(i / ambPerRow);
+      const col = i % ambPerRow;
+      // Live drag override → persisted px/py → adaptive slot (mirrors nodes).
+      const o = ambPos[a.id] ?? (a.px != null && a.py != null ? { x: a.px, y: a.py } : null);
+      return { a, x: o?.x ?? PAD + AMB_R + col * AMB_GAP, y: o?.y ?? ambStartY + AMB_R + row * AMB_ROW_H };
+    });
+  const ambBottom = ambInstances.reduce((m, ai) => Math.max(m, ai.y + AMB_R + 50), 0);
+
+  const height = Math.max(lastRowBottom, demotedBottom + 40, bubbleBottom + 40, nodeBottom, noteBottom, ambBottom);
 
   // ---- approximate month band (orientation aid, not to scale) ----
   const monthBands: { label: string; y: number }[] = [];
@@ -628,6 +664,8 @@ export default function Layer2Canvas({
     // persisted positions so the algorithmic layout is what renders.
     setNodePos({});
     nodePosRef.current = {};
+    setAmbPos({});
+    ambPosRef.current = {};
     setBubblePos({});
     bubblePosRef.current = {};
     setNotePos({});
@@ -646,6 +684,15 @@ export default function Layer2Canvas({
     const d = new Date(iso + "T00:00:00Z");
     return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
   };
+  const fmtMs = (ms: number) => fmt(new Date(ms).toISOString().slice(0, 10));
+
+  // Focus mode: hovering a MAIN node fades everything not in its group. `hovered`
+  // holds the node's own id for nodes, or a b-/note-/d- prefixed key for the
+  // sub-elements — so a value without those prefixes means a main node is hovered.
+  const focusNodeId =
+    hovered && !hovered.startsWith("b-") && !hovered.startsWith("note-") && !hovered.startsWith("d-") ? hovered : null;
+  const focusOp = (belongs: boolean) => (focusNodeId && !belongs ? 0.5 : 1);
+  const FOCUS_TRANSITION = "opacity 120ms ease";
 
   return (
     <div ref={ref} className="flex-1 overflow-auto">
@@ -703,7 +750,7 @@ export default function Layer2Canvas({
               const sy = np.y + (dy / len) * r;
               const edge = edgeColor(b.kind);
               return (
-                <g key={`c-${b.id}`}>
+                <g key={`c-${b.id}`} opacity={focusOp(b.nodeId === focusNodeId)} style={{ transition: FOCUS_TRANSITION }}>
                   <line
                     x1={sx}
                     y1={sy}
@@ -712,7 +759,7 @@ export default function Layer2Canvas({
                     stroke={edge}
                     strokeWidth={1.75}
                     strokeOpacity={0.9}
-                    strokeDasharray={b.kind === "information" ? "2 4" : undefined}
+                    strokeDasharray={b.kind === "context" ? "2 4" : undefined}
                   />
                   <circle cx={sx} cy={sy} r={3} fill={edge} />
                 </g>
@@ -721,7 +768,7 @@ export default function Layer2Canvas({
 
             {/* demoted-node branches off the spine */}
             {demotedInstances.map(({ d, np, x, y }) => (
-              <line key={`db-${d.id}`} x1={np.x} y1={np.y} x2={x} y2={y + DNODE / 2} stroke={OXBLOOD} strokeOpacity={0.4} strokeWidth={1.25} strokeDasharray="2 3" />
+              <line key={`db-${d.id}`} x1={np.x} y1={np.y} x2={x} y2={y + DNODE / 2} stroke={OXBLOOD} strokeOpacity={0.4} strokeWidth={1.25} strokeDasharray="2 3" opacity={focusOp(false)} style={{ transition: FOCUS_TRANSITION }} />
             ))}
 
             {/* Layer-1 note connectors — dotted amber */}
@@ -733,7 +780,7 @@ export default function Layer2Canvas({
               const sx = np.x + (dx / len) * r;
               const sy = np.y + (dy / len) * r;
               return (
-                <g key={`nc-${nt.id}`}>
+                <g key={`nc-${nt.id}`} opacity={focusOp(nt.nodeId === focusNodeId)} style={{ transition: FOCUS_TRANSITION }}>
                   <line x1={sx} y1={sy} x2={cx} y2={cy} stroke={NOTE_BORDER} strokeWidth={1.5} strokeDasharray="2 3" strokeOpacity={0.9} />
                   <circle cx={sx} cy={sy} r={3} fill={NOTE_BORDER} />
                 </g>
@@ -752,7 +799,7 @@ export default function Layer2Canvas({
               const showCheck = n.done && !!n.deadline;
               const extras = n.tags.slice(1);
               return (
-                <g key={n.id}>
+                <g key={n.id} opacity={focusOp(n.id === focusNodeId)} style={{ transition: FOCUS_TRANSITION }}>
                   <g transform={`translate(${cx - half}, ${cy - half}) scale(${sz / GLYPH})`}>
                     <rect width={GLYPH} height={GLYPH} rx={NODE_RX} ry={NODE_RX} fill={fill} stroke={stroke} strokeWidth={1.5} />
                     {showPerimeter && (
@@ -783,16 +830,147 @@ export default function Layer2Canvas({
                     x={cx}
                     y={cy + half + (extras.length ? extras.length * (BAR_H + BAR_GAP) + BAR_GAP : 0) + 18}
                     textAnchor="middle"
-                    fontSize={13.5}
+                    fontSize={14.5}
+                    fontWeight={600}
                     fontFamily="Georgia, serif"
-                    fill="#6b6244"
+                    fill="#2f2a1c"
                   >
                     {trunc(n.label)}
                   </text>
                 </g>
               );
             })}
+
+            {/* ambitions — future items as round dashed markers, joined to the
+                thread by a dashed wire. Read-only here (edit on Layer 1). */}
+            {ambInstances.length > 0 && (
+              <g opacity={focusOp(false)} style={{ transition: FOCUS_TRANSITION }}>
+                {(() => {
+                  const lastPos = positions[positions.length - 1];
+                  return lastPos ? (
+                    <path
+                      d={`M ${lastPos.x} ${lastPos.y} L ${ambInstances[0].x} ${ambInstances[0].y}`}
+                      fill="none"
+                      stroke={OXBLOOD}
+                      strokeOpacity={0.4}
+                      strokeWidth={2}
+                      strokeDasharray="4 5"
+                    />
+                  ) : null;
+                })()}
+                {ambInstances.map((ai, i) => {
+                  const prev = i > 0 ? ambInstances[i - 1] : null;
+                  const sameRow = prev && Math.abs(prev.y - ai.y) < 1;
+                  const primaryColor = ai.a.tags[0] ? tagColors[ai.a.tags[0]] : null;
+                  const fill = ai.a.done ? "#d8cdb4" : primaryColor ?? NODE_FILL;
+                  const stroke = primaryColor && !ai.a.done ? darken(primaryColor) : OXBLOOD;
+                  return (
+                    <g key={ai.a.id} opacity={ai.a.done ? 0.6 : 1}>
+                      {sameRow && prev && (
+                        <path
+                          d={`M ${prev.x} ${prev.y} L ${ai.x} ${ai.y}`}
+                          fill="none"
+                          stroke={OXBLOOD}
+                          strokeOpacity={0.4}
+                          strokeWidth={2}
+                          strokeDasharray="4 5"
+                        />
+                      )}
+                      <circle cx={ai.x} cy={ai.y} r={AMB_R} fill={fill} stroke={stroke} strokeWidth={1.5} strokeDasharray="3 3" />
+                      {ai.a.done && (
+                        <path
+                          d="M -7 0 L -2 5 L 8 -7"
+                          transform={`translate(${ai.x}, ${ai.y})`}
+                          fill="none"
+                          stroke={OXBLOOD}
+                          strokeWidth={2.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      )}
+                      <title>
+                        {ai.a.title} — planned {fmt(ai.a.date)}
+                        {ai.a.done ? " (done)" : ""}
+                      </title>
+                      <text x={ai.x} y={ai.y + AMB_R + 16} textAnchor="middle" fontSize={13} fontFamily="Georgia, serif" fill="#6b6244">
+                        {trunc(ai.a.title)}
+                      </text>
+                      <text x={ai.x} y={ai.y + AMB_R + 31} textAnchor="middle" fontSize={10.5} fontFamily="Georgia, serif" fill="#a8915f">
+                        {fmt(ai.a.date)}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            )}
           </svg>
+
+          {/* hovered node's date — on its own high layer (z-40) ABOVE the node, so the
+              default below-title sub-node cards can never cover it. Pointer-transparent. */}
+          {focusNodeId &&
+            (() => {
+              const p = posById.get(focusNodeId);
+              const n = nodes.find((x) => x.id === focusNodeId);
+              if (!p || !n) return null;
+              return (
+                <div
+                  className="pointer-events-none absolute z-40"
+                  style={{ left: p.x, top: p.y - szOf(focusNodeId) / 2 - 12, transform: "translate(-50%, -100%)" }}
+                >
+                  <span
+                    className="rounded-md border border-hairline bg-paper-surface px-2 py-0.5 text-[13px] font-medium text-ink shadow-sm"
+                    style={{ fontFamily: "Georgia, serif", whiteSpace: "nowrap" }}
+                  >
+                    {fmtMs(n.t)}
+                  </span>
+                </div>
+              );
+            })()}
+
+          {/* ambition / deadline-marker hit areas — drag to reposition, like nodes.
+              (Read-only otherwise on Layer 2; editing still lives on Layer 1.) */}
+          {canEdit &&
+            ambInstances.map(({ a, x, y }) => {
+              const draggingThis = draggingAmb === a.id;
+              return (
+                <div
+                  key={`ahit-${a.id}`}
+                  className={draggingThis ? "absolute cursor-grabbing" : "absolute cursor-grab"}
+                  title="Drag to move"
+                  style={{ left: x - AMB_R, top: y - AMB_R, width: AMB_R * 2, height: AMB_R * 2, borderRadius: 9999, touchAction: "none" }}
+                  onPointerDown={(e) => {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    ambDragRef.current = { id: a.id, moved: false, dist: 0 };
+                    setDraggingAmb(a.id);
+                  }}
+                  onPointerMove={(e) => {
+                    if (draggingAmb !== a.id || !ambDragRef.current) return;
+                    ambDragRef.current.dist += Math.abs(e.movementX) + Math.abs(e.movementY);
+                    if (ambDragRef.current.dist <= 4) return; // ignore jitter
+                    ambDragRef.current.moved = true;
+                    setAmbPos((prev) => {
+                      const cur = prev[a.id] ?? { x, y };
+                      const nx = Math.max(BAND_W + AMB_R, Math.min(COL_W - AMB_R, cur.x + e.movementX));
+                      const ny = Math.max(AMB_R + 8, cur.y + e.movementY);
+                      const next = { ...prev, [a.id]: { x: nx, y: ny } };
+                      ambPosRef.current = next;
+                      return next;
+                    });
+                  }}
+                  onPointerUp={(e) => {
+                    if (draggingAmb !== a.id) return;
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                    setDraggingAmb(null);
+                    const info = ambDragRef.current;
+                    ambDragRef.current = null;
+                    if (info?.moved) {
+                      const cur = ambPosRef.current[a.id] ?? { x, y };
+                      updateAmbitionPosition(a.id, cur.x, cur.y); // persist (fire-and-forget)
+                    }
+                  }}
+                />
+              );
+            })}
 
           {/* node hit area: drag to reposition · double-click to rename · hover for + and ⋯ */}
           {canEdit &&
@@ -1016,7 +1194,7 @@ export default function Layer2Canvas({
             <div
               key={`dn-${d.id}`}
               className="absolute"
-              style={{ left: x, top: y, width: DBUB_W, transform: "translateX(-50%)" }}
+              style={{ left: x, top: y, width: DBUB_W, transform: "translateX(-50%)", opacity: focusOp(false), transition: FOCUS_TRANSITION }}
               onMouseEnter={() => setHovered(`d-${d.id}`)}
               onMouseLeave={() => setHovered((h) => (h === `d-${d.id}` ? null : h))}
             >
@@ -1057,7 +1235,7 @@ export default function Layer2Canvas({
                 data-bubble={b.id}
                 className={canEdit ? (dragging ? "absolute cursor-grabbing select-none" : "absolute cursor-grab select-none") : "absolute select-none"}
                 title={canEdit ? "Click to edit · drag to move · corner to resize" : ""}
-                style={{ left: cx, top: cy, width: w, transform: "translate(-50%, -50%)", touchAction: "none", zIndex: dragging || resizing ? 30 : 12 }}
+                style={{ left: cx, top: cy, width: w, transform: "translate(-50%, -50%)", touchAction: "none", zIndex: dragging || resizing ? 30 : 12, opacity: focusOp(b.nodeId === focusNodeId), transition: FOCUS_TRANSITION }}
                 onMouseEnter={() => setHovered(`b-${b.id}`)}
                 onMouseLeave={() => setHovered((hh) => (hh === `b-${b.id}` ? null : hh))}
                 onPointerDown={
@@ -1167,7 +1345,7 @@ export default function Layer2Canvas({
                 key={`note-${nt.id}`}
                 className={canEdit ? (dragging ? "absolute cursor-grabbing select-none" : "absolute cursor-grab select-none") : "absolute select-none"}
                 title={canEdit ? "Drag to move · corner to resize" : nt.body}
-                style={{ left: cx, top: cy, width: w, transform: "translate(-50%, -50%)", touchAction: "none", zIndex: dragging || resizing ? 30 : 11 }}
+                style={{ left: cx, top: cy, width: w, transform: "translate(-50%, -50%)", touchAction: "none", zIndex: dragging || resizing ? 30 : 11, opacity: focusOp(nt.nodeId === focusNodeId), transition: FOCUS_TRANSITION }}
                 onMouseEnter={() => setHovered(`note-${nt.id}`)}
                 onMouseLeave={() => setHovered((hh) => (hh === `note-${nt.id}` ? null : hh))}
                 onPointerDown={
