@@ -11,6 +11,7 @@ import {
   deleteNode,
   archiveProject,
   deleteProject,
+  mergeProjects,
   toggleProjectTag,
   toggleNodeTag,
   toggleAmbitionTag,
@@ -28,6 +29,8 @@ import {
 } from "./actions";
 import { createBubble, updateBubble, deleteBubble } from "../project/[id]/actions";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { fmtEU } from "@/lib/dateFormat";
 import MiniCalendar from "./MiniCalendar";
 import SubnodeChip from "@/app/SubnodeChip";
 import { useWand } from "./wand";
@@ -71,7 +74,7 @@ type TagCat = {
   values: { id: string; value: string; color: string }[];
 };
 
-type LaneNode = {
+export type LaneNode = {
   id: string;
   label: string;
   t: number;
@@ -81,10 +84,10 @@ type LaneNode = {
   origin: string;
   tags: string[];
 };
-type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number; tags: string[] };
-type Note = { id: string; body: string; x: number; y: number; anchorT: number };
-type Attention = "inactive" | "alert" | "normal";
-type Lane = {
+export type Ambition = { id: string; title: string; t: number; done: boolean; isDeadline: boolean; stage: number; tags: string[] };
+export type Note = { id: string; body: string; x: number; y: number; anchorT: number };
+export type Attention = "inactive" | "alert" | "normal";
+export type Lane = {
   id: string;
   name: string;
   origin: string;
@@ -177,8 +180,6 @@ const ZOOMS = [
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const isoFromMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-const fmtEU = (d: string | number) =>
-  new Date(typeof d === "string" ? d + "T00:00:00" : d).toLocaleDateString("en-GB");
 
 // Captions get truncated so they stay short under each node.
 const LABEL_MAX = 26;
@@ -563,6 +564,11 @@ export default function Timeline({
     } | null
   >(null);
   const [projConfirm, setProjConfirm] = useState(false);
+  // Merge flow: pick a source project to fold into projMenu (the target), then an
+  // explicit confirmation naming both before it runs.
+  const [mergePicking, setMergePicking] = useState(false);
+  const [mergeSource, setMergeSource] = useState<{ id: string; name: string; nodeCount: number; ambitionCount: number } | null>(null);
+  const router = useRouter();
 
   const measured = vw > 0;
   const pxPerDay = measured ? Math.max(6, (vw - LABEL_W) / daysPerScreen) : 40;
@@ -1141,9 +1147,29 @@ export default function Timeline({
     removeLaneById(id);
     closeProj();
   };
+  // Fold mergeSource INTO projMenu (the target), then delete the source. The
+  // target gains the source's nodes, so we refresh from the server to rebuild its
+  // timeline; the source lane is removed immediately for instant feedback.
+  const doMerge = async () => {
+    if (!projMenu || !mergeSource) return;
+    const targetId = projMenu.id;
+    const sourceId = mergeSource.id;
+    setBusy(true);
+    const res = await mergeProjects(targetId, sourceId);
+    setBusy(false);
+    if (res?.error) {
+      alert("Could not merge: " + res.error);
+      return;
+    }
+    removeLaneById(sourceId);
+    closeProj();
+    router.refresh();
+  };
   const closeProj = () => {
     setProjMenu(null);
     setProjConfirm(false);
+    setMergePicking(false);
+    setMergeSource(null);
   };
 
   // Esc puts the magic wand down.
@@ -3318,7 +3344,63 @@ export default function Timeline({
       {projMenu && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && closeProj()}>
           <div onClick={(e) => e.stopPropagation()} className={card}>
-            {!projConfirm ? (
+            {mergeSource ? (
+              <>
+                {/* Explicit second confirmation — names BOTH projects and the direction. */}
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">Merge into {projMenu.name}?</h2>
+                <p className="mb-5 text-sm text-muted">
+                  Everything in <span className="font-medium text-ink">{mergeSource.name}</span> — its {mergeSource.nodeCount} node
+                  {mergeSource.nodeCount === 1 ? "" : "s"}, {mergeSource.ambitionCount} ambition
+                  {mergeSource.ambitionCount === 1 ? "" : "s"}, and all their information, context, notes and tags — will move into{" "}
+                  <span className="font-medium text-ink">{projMenu.name}</span> and be placed on its timeline by date.{" "}
+                  <span className="font-medium text-ink">{mergeSource.name}</span> will then be{" "}
+                  <span className="font-medium text-ink">permanently deleted</span>. This can&apos;t be undone.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setMergeSource(null)} disabled={busy} className={ghost}>
+                    Back
+                  </button>
+                  <button onClick={doMerge} disabled={busy} className={danger}>
+                    {busy ? "Merging…" : `Merge & delete ${mergeSource.name}`}
+                  </button>
+                </div>
+              </>
+            ) : mergePicking ? (
+              <>
+                <h2 className="brand-serif mb-1 text-lg text-oxblood">Merge into {projMenu.name}</h2>
+                <p className="mb-4 text-sm text-muted">
+                  Pick a project to fold into <span className="font-medium text-ink">{projMenu.name}</span>. Its nodes,
+                  information and tags move in; the project you pick is then deleted.
+                </p>
+                <div className="mb-4 flex max-h-72 flex-col gap-1 overflow-auto">
+                  {lanes.filter((l) => l.id !== projMenu.id).length === 0 && (
+                    <p className="text-xs text-muted">No other projects to merge in.</p>
+                  )}
+                  {lanes
+                    .filter((l) => l.id !== projMenu.id)
+                    .map((l) => (
+                      <button
+                        key={l.id}
+                        onClick={() =>
+                          setMergeSource({ id: l.id, name: l.name, nodeCount: l.nodes.length, ambitionCount: l.ambitions.length })
+                        }
+                        className="flex items-center justify-between rounded-md border border-hairline px-3 py-2 text-left text-sm hover:bg-paper"
+                      >
+                        <span className="truncate text-ink">{l.name}</span>
+                        <span className="ml-3 shrink-0 text-xs text-muted">
+                          {l.nodes.length} node{l.nodes.length === 1 ? "" : "s"}
+                          {l.archived ? " · archived" : ""}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={() => setMergePicking(false)} disabled={busy} className={ghost}>
+                    Back
+                  </button>
+                </div>
+              </>
+            ) : !projConfirm ? (
               <>
                 <h2 className="brand-serif mb-1 text-lg text-oxblood">{projMenu.name}</h2>
                 <p className="mb-3 text-sm text-muted">
@@ -3417,6 +3499,9 @@ export default function Timeline({
                 </div>
 
                 <div className="flex flex-col gap-2">
+                  <button onClick={() => setMergePicking(true)} disabled={busy || lanes.length < 2} className={ghost}>
+                    Merge another project in…
+                  </button>
                   <button onClick={doArchive} disabled={busy} className={ghost}>
                     {projMenu.archived ? "Archive again" : "Archive (hide, reversible)"}
                   </button>

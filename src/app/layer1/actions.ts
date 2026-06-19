@@ -564,6 +564,35 @@ export async function archiveProject(id: string): Promise<{ error?: string }> {
   return {};
 }
 
+// Merge the SOURCE project entirely into the TARGET, then delete the source.
+// The DB function (merge-projects.sql) re-parents all of the source's nodes,
+// ambitions, information/context bubbles and notes onto the target, unions its
+// project-level tags in, and deletes the source — all atomically. It is built on
+// a reusable move_nodes_to_project primitive so a future "split nodes into their
+// own project" can call the same engine. Destructive + irreversible; the UI shows
+// an explicit confirmation naming both projects before this runs.
+export async function mergeProjects(targetId: string, sourceId: string): Promise<{ error?: string }> {
+  if (targetId === sourceId) return { error: "Pick a different project to merge in." };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+  const orgId = await orgOfProject(supabase, targetId);
+  if (!orgId) return { error: "Project not found." };
+  const { error } = await supabase.rpc("merge_projects", { p_target: targetId, p_source: sourceId });
+  if (error) return { error: error.message };
+  await logActivity(supabase, {
+    orgId,
+    actorId: user.id,
+    action: "project.merged",
+    targetType: "project",
+    targetId,
+    description: "Merged another project in",
+  });
+  return {};
+}
+
 // Permanently delete a project and everything under it (nodes, ambitions,
 // cached emails, etc.) via database cascade. Gmail itself is never touched.
 export async function deleteProject(id: string): Promise<{ error?: string }> {
