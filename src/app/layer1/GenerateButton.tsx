@@ -3,18 +3,15 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SparklesIcon, XIcon, Spinner } from "./GenerateIcons";
-import { triggerGeneration, parseByoRequest, GENERATION_INPUT_LIMIT, GENERATED_FLAG, type GenerationSourceType } from "./generate";
-import { BYO_TEMPLATE } from "@/lib/prompts/byoTemplate";
+import { triggerGeneration, GENERATION_INPUT_LIMIT, GENERATED_FLAG, type GenerationSourceType } from "./generate";
 
-// The dialog's tab union: the four AI source types + the BYO LLM tab, which
-// follows a different (mechanical, free) submit path.
-type Tab = GenerationSourceType | "byo";
-const SOURCES: { value: Tab; label: string }[] = [
+// AI generation dialog (paid — consumes the import quota). The free BYO path now
+// lives in its own header button (ByoButton.tsx), so this dialog is AI-only.
+const SOURCES: { value: GenerationSourceType; label: string }[] = [
   { value: "auto-detect", label: "Auto-detect" },
   { value: "gmail-thread", label: "Gmail thread" },
   { value: "meeting-notes", label: "Meeting notes" },
   { value: "brain-dump", label: "Brain dump" },
-  { value: "byo", label: "BYO LLM" },
 ];
 
 const FEATURED_BTN = "flex items-center gap-1.5 rounded-md bg-oxblood px-3 py-1.5 text-sm font-medium text-paper hover:bg-oxblood-dark disabled:opacity-50";
@@ -36,17 +33,13 @@ export default function GenerateButton({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [sourceType, setSourceType] = useState<Tab>("auto-detect");
+  const [sourceType, setSourceType] = useState<GenerationSourceType>("auto-detect");
   const [pasteContent, setPasteContent] = useState("");
   const [projectName, setProjectName] = useState("");
   const [tagHints, setTagHints] = useState("");
-  const [byoOutput, setByoOutput] = useState("");
-  const [copied, setCopied] = useState(false);
   const [limitHit, setLimitHit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const isByo = sourceType === "byo";
 
   // Close discards everything — no autosave. Blocked while in-flight.
   const close = () => {
@@ -56,8 +49,6 @@ export default function GenerateButton({
     setPasteContent("");
     setProjectName("");
     setTagHints("");
-    setByoOutput("");
-    setCopied(false);
     setLimitHit(false);
     setError(null);
   };
@@ -82,44 +73,23 @@ export default function GenerateButton({
     }
   };
 
-  const copyTemplate = async () => {
-    try {
-      await navigator.clipboard.writeText(BYO_TEMPLATE);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — user can still select + copy manually */
-    }
-  };
-
-  const canSubmit = (isByo ? byoOutput.trim().length > 0 : pasteContent.trim().length > 0) && !busy;
+  const canSubmit = pasteContent.trim().length > 0 && !busy;
 
   const submit = async () => {
     if (!canSubmit) return;
     setError(null);
     setBusy(true);
     try {
-      if (sourceType === "byo") {
-        const { projectId, summary } = await parseByoRequest(byoOutput);
-        let msg = `Parsed ${summary.events} events · ${summary.informations} info · ${summary.contexts} contexts.`;
-        if (summary.skipped > 0) msg += ` Skipped ${summary.skipped} events with invalid dates.`;
-        if (summary.truncated > 0) msg += ` ${summary.truncated} subnodes truncated.`;
-        try {
-          sessionStorage.setItem(GENERATED_FLAG, msg);
-        } catch {}
-        router.push(`/project/${projectId}`);
-      } else {
-        const { projectId } = await triggerGeneration({
-          sourceType,
-          pasteContent,
-          projectName: projectName.trim() || null,
-          tagHints: tagHints.trim() || null,
-        });
-        try {
-          sessionStorage.setItem(GENERATED_FLAG, "Project generated. Edit anything you want — AI did a first pass.");
-        } catch {}
-        router.push(`/project/${projectId}`);
-      }
+      const { projectId } = await triggerGeneration({
+        sourceType,
+        pasteContent,
+        projectName: projectName.trim() || null,
+        tagHints: tagHints.trim() || null,
+      });
+      try {
+        sessionStorage.setItem(GENERATED_FLAG, "Project generated. Edit anything you want — AI did a first pass.");
+      } catch {}
+      router.push(`/project/${projectId}`);
     } catch (err) {
       // Keep the dialog open with inputs preserved so the user can retry.
       setBusy(false);
@@ -166,7 +136,7 @@ export default function GenerateButton({
               style={busy ? { opacity: 0.5, pointerEvents: "none" } : undefined}
               aria-hidden={busy}
             >
-              {/* Source type (5 tabs) */}
+              {/* Source type */}
               <div>
                 <div className={SMALLCAPS}>Source</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -193,96 +163,53 @@ export default function GenerateButton({
                 </div>
               </div>
 
-              {isByo ? (
-                <>
-                  {/* BYO: prompt template (read-only) + copy */}
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-[10px] uppercase tracking-wide text-muted">Prompt template</span>
-                      <button onClick={copyTemplate} className="rounded border border-hairline px-2 py-0.5 text-[11px] text-oxblood hover:bg-paper">
-                        {copied ? "Copied!" : "Copy template"}
-                      </button>
-                    </div>
-                    <textarea
-                      readOnly
-                      value={BYO_TEMPLATE}
-                      onFocus={(e) => e.currentTarget.select()}
-                      className={`${FIELD} resize-none`}
-                      style={{ minHeight: 120, fontFamily: "ui-monospace, monospace", fontSize: 11, lineHeight: 1.4 }}
-                    />
-                    <p className="mt-1 text-[11px] italic text-muted">
-                      Copy this, run it through your own LLM with your content, then paste the result below.
-                    </p>
-                  </div>
+              {/* Paste content */}
+              <div>
+                <div className={SMALLCAPS}>Paste content</div>
+                <textarea
+                  autoFocus
+                  value={pasteContent}
+                  onChange={(e) => onPasteChange(e.target.value)}
+                  placeholder="Paste an email thread, meeting notes, or any text content…"
+                  className={`${FIELD} resize-y`}
+                  style={{ minHeight: 130 }}
+                />
+                {limitHit && <p className="mt-1 text-xs text-oxblood">Limit: 50,000 characters. Paste a smaller section.</p>}
+              </div>
 
-                  {/* BYO: paste the LLM output */}
-                  <div>
-                    <div className={SMALLCAPS}>Paste your LLM output here</div>
-                    <textarea
-                      autoFocus
-                      value={byoOutput}
-                      onChange={(e) => setByoOutput(e.target.value)}
-                      placeholder="Paste the formatted timeline your LLM produced…"
-                      className={`${FIELD} resize-y`}
-                      style={{ minHeight: 130 }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* AI: paste content */}
-                  <div>
-                    <div className={SMALLCAPS}>Paste content</div>
-                    <textarea
-                      autoFocus
-                      value={pasteContent}
-                      onChange={(e) => onPasteChange(e.target.value)}
-                      placeholder="Paste an email thread, meeting notes, or any text content…"
-                      className={`${FIELD} resize-y`}
-                      style={{ minHeight: 130 }}
-                    />
-                    {limitHit && <p className="mt-1 text-xs text-oxblood">Limit: 50,000 characters. Paste a smaller section.</p>}
-                  </div>
+              {/* Project name (optional) */}
+              <div>
+                <div className={SMALLCAPS}>
+                  Project name <span className="font-normal normal-case italic tracking-normal">— optional, AI will suggest one</span>
+                </div>
+                <input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Leave blank to let AI choose" className={FIELD} />
+              </div>
 
-                  {/* AI: project name (optional) */}
-                  <div>
-                    <div className={SMALLCAPS}>
-                      Project name <span className="font-normal normal-case italic tracking-normal">— optional, AI will suggest one</span>
-                    </div>
-                    <input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Leave blank to let AI choose" className={FIELD} />
-                  </div>
-
-                  {/* AI: tag hints (optional) */}
-                  <div>
-                    <div className={SMALLCAPS}>
-                      Tag hints <span className="font-normal normal-case italic tracking-normal">— optional, AI will detect tags from content</span>
-                    </div>
-                    <input value={tagHints} onChange={(e) => setTagHints(e.target.value)} placeholder="e.g. Asana, Ting, Billing" className={FIELD} />
-                  </div>
-                </>
-              )}
+              {/* Tag hints (optional) */}
+              <div>
+                <div className={SMALLCAPS}>
+                  Tag hints <span className="font-normal normal-case italic tracking-normal">— optional, AI will detect tags from content</span>
+                </div>
+                <input value={tagHints} onChange={(e) => setTagHints(e.target.value)} placeholder="e.g. Asana, Ting, Billing" className={FIELD} />
+              </div>
 
               {error && <p className="text-xs text-oxblood">{error}</p>}
             </div>
 
             {/* Footer */}
             <div className="flex items-center justify-between gap-3 px-5 py-3" style={{ borderTop: HAIRLINE_05 }}>
-              {isByo ? (
-                <span className="brand-serif text-[11px] italic text-muted">Free — no import cost</span>
-              ) : (
-                <span className="brand-serif text-[11px] italic" style={{ color: lowTone ? WARN_TONE : "var(--muted)" }}>
-                  {importsLabel(importsRemaining)}
-                </span>
-              )}
+              <span className="brand-serif text-[11px] italic" style={{ color: lowTone ? WARN_TONE : "var(--muted)" }}>
+                {importsLabel(importsRemaining)}
+              </span>
               {busy ? (
                 <span className="brand-serif flex items-center gap-2 text-[13px] italic text-oxblood">
                   <Spinner size={14} />
-                  {isByo ? "Parsing…" : "Generating your project…"}
+                  Generating your project…
                 </span>
               ) : (
                 <button onClick={submit} disabled={!canSubmit} className={FEATURED_BTN}>
                   <SparklesIcon size={15} />
-                  {isByo ? "Parse · no import cost" : "Generate · 1 import"}
+                  Generate · 1 import
                 </button>
               )}
             </div>
